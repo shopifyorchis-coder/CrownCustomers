@@ -1,5 +1,6 @@
 {
   "scripts": {
-    "start": "cd backend && npx prisma generate && npx prisma db push && npm start"
+    "postinstall": "npm --prefix backend install",
+    "start": "npm --prefix backend run prisma:push && npm --prefix backend start"
   }
 }
