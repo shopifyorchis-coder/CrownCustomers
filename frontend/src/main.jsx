@@ -510,6 +510,7 @@ function App() {
   const [settings, setSettings] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
   async function loadDashboard() {
     const data = await getJson('/api/dashboard');
@@ -529,10 +530,13 @@ function App() {
 
   async function refreshAll() {
     await Promise.all([loadDashboard(), loadLogs(), loadSettings()]);
+    setError('');
   }
 
   useEffect(() => {
-    refreshAll().catch(() => {});
+    refreshAll().catch((err) => {
+      setError(err.message || 'Unable to load CrownCustomers right now.');
+    });
   }, []);
 
   async function handleSync() {
@@ -570,7 +574,26 @@ function App() {
   );
 
   if (!settings) {
-    return <div className="loading-screen">Loading CrownCustomers...</div>;
+    return (
+      <div className="loading-screen">
+        <div className="loading-card">
+          <div>Loading CrownCustomers...</div>
+          {error && (
+            <>
+              <p className="loading-error">{error}</p>
+              <button className="primary-button" onClick={() => {
+                setError('');
+                refreshAll().catch((err) => {
+                  setError(err.message || 'Unable to load CrownCustomers right now.');
+                });
+              }}>
+                Retry
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
   }
 
   return (
