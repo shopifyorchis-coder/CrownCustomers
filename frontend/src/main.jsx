@@ -6,10 +6,10 @@ const API_BASE =
   import.meta.env.VITE_API_URL || 'https://crowncustomers-production.up.railway.app';
 
 const NAV_ITEMS = [
-  { key: 'overview', label: 'Overview', section: 'MAIN' },
-  { key: 'activity', label: 'Activity', section: 'MAIN' },
-  { key: 'settings', label: 'Settings', section: 'CONFIG' },
-  { key: 'plan', label: 'Plan', section: 'CONFIG' }
+  { key: 'overview', label: 'Overview', section: 'MAIN', icon: 'grid' },
+  { key: 'activity', label: 'Activity', section: 'MAIN', icon: 'pulse' },
+  { key: 'settings', label: 'Settings', section: 'CONFIG', icon: 'gear' },
+  { key: 'plan', label: 'Plan', section: 'CONFIG', icon: 'star' }
 ];
 
 const SETTINGS_SECTIONS = [
@@ -53,7 +53,10 @@ function AppShell({ page, setPage, enabled, children }) {
                   className={`nav-item ${page === item.key ? 'active' : ''}`}
                   onClick={() => setPage(item.key)}
                 >
-                  <span>{item.label}</span>
+                  <span className="nav-copy">
+                    <span className={`nav-icon nav-icon-${item.icon}`} aria-hidden="true" />
+                    <span>{item.label}</span>
+                  </span>
                   {page === item.key && <span className="nav-dot" />}
                 </button>
               ))}
@@ -257,7 +260,7 @@ function OverviewPage({ dashboard, settings, onSync, syncing, onQuickDiscountSav
 
 function ActivityPage({ logs }) {
   return (
-    <div className="page-stack">
+    <div className="page-stack activity-page">
       <div className="page-row">
         <h2 className="section-title">Email Activity</h2>
         <select className="filter-select" defaultValue="all">
@@ -293,11 +296,11 @@ function ActivityPage({ logs }) {
           </div>
         ) : (
           <div className="empty-state">
-            <div className="empty-icon">A</div>
+            <div className="empty-icon empty-icon-mail" />
             <h3>No activity yet</h3>
             <p>
-              When a customer enters your crown segment for the first time, activity will
-              appear here.
+              When a customer enters your crown segment for the first time, an automatic
+              reward email will appear here.
             </p>
           </div>
         )}
@@ -329,7 +332,8 @@ function SettingsPage({ settings, setSettings, onSave }) {
             <h3>App status</h3>
             <p>
               When enabled, CrownCustomers sends a unique reward to each customer who enters
-              your crown segment for the first time.
+              your crown segment for the first time. When disabled, it still calculates RFM
+              but does not send emails.
             </p>
             <button
               className={`toggle-card ${settings.enabled ? 'on' : ''}`}
@@ -453,7 +457,7 @@ function SettingsPage({ settings, setSettings, onSave }) {
 
 function PlanPage() {
   return (
-    <div className="page-stack">
+    <div className="page-stack plan-page">
       <section className="hero-block compact">
         <h2>Choose your plan</h2>
         <p>Scale with your store. Upgrade or cancel anytime.</p>
@@ -498,7 +502,7 @@ function PlanPage() {
       <section className="panel note-panel">
         <strong>About the Free plan limit:</strong> If your store exceeds 250 customers,
         CrownCustomers pauses new reward sends automatically, while still keeping RFM
-        scoring active.
+        scoring active. When you upgrade, sends resume without losing data.
       </section>
     </div>
   );
