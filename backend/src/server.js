@@ -9,7 +9,10 @@ const PORT = process.env.PORT || 4000;
 const SHOP = 'demo-shop.myshopify.com';
 const frontendDist = path.resolve(__dirname, '../../frontend/dist');
 
-app.use(cors());
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
 app.use(express.json());
 
 async function getOrCreateSettings() {

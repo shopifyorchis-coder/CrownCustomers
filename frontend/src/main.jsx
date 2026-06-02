@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const API = import.meta.env.VITE_API_URL || '';
+const API_BASE =
+  import.meta.env.VITE_API_URL || 'https://crowncustomers-production.up.railway.app';
 
 const NAV_ITEMS = [
   { key: 'overview', label: 'Overview', section: 'MAIN' },
@@ -19,7 +20,7 @@ const SETTINGS_SECTIONS = [
 ];
 
 async function getJson(path, options) {
-  const response = await fetch(`${API}${path}`, options);
+  const response = await fetch(`${API_BASE}${path}`, options);
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);
   }
@@ -529,12 +530,14 @@ function App() {
   }
 
   async function refreshAll() {
+    await getJson('/api/health');
     await Promise.all([loadDashboard(), loadLogs(), loadSettings()]);
     setError('');
   }
 
   useEffect(() => {
     refreshAll().catch((err) => {
+      console.error('CrownCustomers startup failed:', err);
       setError(err.message || 'Unable to load CrownCustomers right now.');
     });
   }, []);
@@ -584,6 +587,7 @@ function App() {
               <button className="primary-button" onClick={() => {
                 setError('');
                 refreshAll().catch((err) => {
+                  console.error('CrownCustomers retry failed:', err);
                   setError(err.message || 'Unable to load CrownCustomers right now.');
                 });
               }}>
