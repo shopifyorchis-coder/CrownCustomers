@@ -1,164 +1,613 @@
-import React, {useEffect, useState} from 'react';
-import {createRoot} from 'react-dom/client';
-import '@shopify/polaris/build/esm/styles.css';
-import {
-  AppProvider,
-  Frame,
-  Navigation,
-  Page,
-  Card,
-  Text,
-  Button,
-  TextField,
-  Select,
-  BlockStack,
-  InlineStack,
-  Badge,
-  DataTable,
-  Banner,
-  EmptyState,
-  Divider
-} from '@shopify/polaris';
+import React, { useEffect, useMemo, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import './styles.css';
 
 const API = import.meta.env.VITE_API_URL || '';
 
-function Dashboard() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
+const NAV_ITEMS = [
+  { key: 'overview', label: 'Overview', section: 'MAIN' },
+  { key: 'activity', label: 'Activity', section: 'MAIN' },
+  { key: 'settings', label: 'Settings', section: 'CONFIG' },
+  { key: 'plan', label: 'Plan', section: 'CONFIG' }
+];
 
-  async function load() {
-    const res = await fetch(`${API}/api/dashboard`);
-    setData(await res.json());
+const SETTINGS_SECTIONS = [
+  { key: 'status', label: 'Status' },
+  { key: 'discount', label: 'Discount' },
+  { key: 'email', label: 'Email' },
+  { key: 'cooldown', label: 'Cooldown' }
+];
+
+async function getJson(path, options) {
+  const response = await fetch(`${API}${path}`, options);
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
   }
+  return response.json();
+}
 
-  async function syncDemo() {
-    setLoading(true);
-    await fetch(`${API}/api/sync-demo`, {method: 'POST'});
-    await load();
-    setLoading(false);
-  }
+function Pill({ children, tone = 'default' }) {
+  return <span className={`pill pill-${tone}`}>{children}</span>;
+}
 
-  useEffect(() => { load(); }, []);
-
-  const rows = (data?.customers || []).map(c => [c.name, c.email, `$${c.totalSpent}`, c.ordersCount, c.rfmScore, c.isTop ? 'Top customer' : 'Regular']);
-
+function AppShell({ page, setPage, enabled, children }) {
   return (
-    <Page title="Welcome to CrownCustomers">
-      <BlockStack gap="400">
-        <Card>
-          <BlockStack gap="200">
-            <Text variant="headingMd">What does CrownCustomers do?</Text>
-            <Text as="p">CrownCustomers identifies your best customers using RFM-style scoring and helps you reward them with a personal coupon email.</Text>
-          </BlockStack>
-        </Card>
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand-block">
+          <div className="brand-mark">C</div>
+          <div>
+            <div className="brand-name">CrownCustomers</div>
+            <Pill tone="gold">RFM POWERED</Pill>
+          </div>
+        </div>
 
-        <Card>
-          <BlockStack gap="300">
-            <Text variant="headingMd">Step 1 · Sync store</Text>
-            <Text as="p">Import customers and orders. This demo button creates sample customers so you can test the app quickly.</Text>
-            <Button variant="primary" loading={loading} onClick={syncDemo}>Start demo sync</Button>
-          </BlockStack>
-        </Card>
+        <nav className="sidebar-nav">
+          {['MAIN', 'CONFIG'].map((section) => (
+            <div className="nav-group" key={section}>
+              <div className="nav-label">{section}</div>
+              {NAV_ITEMS.filter((item) => item.section === section).map((item) => (
+                <button
+                  key={item.key}
+                  className={`nav-item ${page === item.key ? 'active' : ''}`}
+                  onClick={() => setPage(item.key)}
+                >
+                  <span>{item.label}</span>
+                  {page === item.key && <span className="nav-dot" />}
+                </button>
+              ))}
+            </div>
+          ))}
+        </nav>
 
-        <InlineStack gap="400" wrap={false}>
-          <Card><Text variant="headingMd">Customers</Text><Text variant="heading2xl">{data?.stats?.totalCustomers || 0}</Text></Card>
-          <Card><Text variant="headingMd">Crown customers</Text><Text variant="heading2xl">{data?.stats?.topCustomers || 0}</Text></Card>
-          <Card><Text variant="headingMd">Activity logs</Text><Text variant="heading2xl">{data?.stats?.emailsSent || 0}</Text></Card>
-        </InlineStack>
+        <div className="profile-card">
+          <div className="profile-avatar">CC</div>
+          <div>
+            <div className="profile-name">crowncustomers</div>
+            <div className="profile-plan">Free plan</div>
+          </div>
+        </div>
+      </aside>
 
-        <Card>
-          <BlockStack gap="300">
-            <Text variant="headingMd">Customer ranking</Text>
-            {rows.length ? <DataTable columnContentTypes={['text','text','text','numeric','numeric','text']} headings={['Name','Email','Spent','Orders','Score','Status']} rows={rows} /> : <EmptyState heading="No customers yet" image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"><p>Click Start demo sync first.</p></EmptyState>}
-          </BlockStack>
-        </Card>
-      </BlockStack>
-    </Page>
+      <main className="main-panel">
+        <header className="topbar">
+          <h1>{NAV_ITEMS.find((item) => item.key === page)?.label || 'CrownCustomers'}</h1>
+          <Pill tone={enabled ? 'success' : 'default'}>
+            {enabled ? 'Enabled' : 'Disabled'}
+          </Pill>
+        </header>
+        <div className="content-area">{children}</div>
+      </main>
+    </div>
   );
 }
 
-function Activity() {
-  const [logs, setLogs] = useState([]);
-  useEffect(() => { fetch(`${API}/api/activity`).then(r => r.json()).then(setLogs); }, []);
-  const rows = logs.map(l => [new Date(l.createdAt).toLocaleString(), l.status, l.customer, l.message]);
-  return <Page title="Activity"><Card>{rows.length ? <DataTable columnContentTypes={['text','text','text','text']} headings={['Date','Status','Customer','Message']} rows={rows} /> : <Banner tone="info">No activity yet. Sync demo customers first.</Banner>}</Card></Page>;
-}
+function OverviewPage({ dashboard, settings, onSync, syncing, onQuickDiscountSave, quickDiscount, setQuickDiscount }) {
+  const stats = dashboard?.stats || {};
+  const customers = dashboard?.customers || [];
 
-function Settings() {
-  const [s, setS] = useState(null);
-  const [saved, setSaved] = useState(false);
-  useEffect(() => { fetch(`${API}/api/settings`).then(r => r.json()).then(setS); }, []);
-  if (!s) return <Page title="Settings"><Card>Loading...</Card></Page>;
-  async function save() {
-    const res = await fetch(`${API}/api/settings`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(s) });
-    setS(await res.json());
-    setSaved(true);
-  }
   return (
-    <Page title="Settings">
-      <BlockStack gap="400">
-        {saved && <Banner tone="success">Settings saved.</Banner>}
-        <Card>
-          <BlockStack gap="300">
-            <Text variant="headingMd">Status</Text>
-            <Button pressed={s.enabled} onClick={() => setS({...s, enabled: !s.enabled})}>{s.enabled ? 'CrownCustomers enabled' : 'CrownCustomers disabled'}</Button>
-          </BlockStack>
-        </Card>
-        <Card>
-          <BlockStack gap="300">
-            <Text variant="headingMd">Discount</Text>
-            <TextField label="Discount value" type="number" value={String(s.discountValue)} onChange={v => setS({...s, discountValue: Number(v)})} />
-            <Select label="Type" options={[{label:'Percentage (%)', value:'percentage'}, {label:'Fixed amount', value:'fixed'}]} value={s.discountType} onChange={v => setS({...s, discountType:v})} />
-            <TextField label="Coupon duration (days)" type="number" value={String(s.couponDays)} onChange={v => setS({...s, couponDays: Number(v)})} />
-          </BlockStack>
-        </Card>
-        <Card>
-          <BlockStack gap="300">
-            <Text variant="headingMd">Email</Text>
-            <TextField label="Email subject" value={s.emailSubject} onChange={v => setS({...s, emailSubject:v})} />
-            <TextField label="Intro text" value={s.introText} multiline={3} onChange={v => setS({...s, introText:v})} />
-            <TextField label="Cooldown days" type="number" value={String(s.cooldownDays)} onChange={v => setS({...s, cooldownDays: Number(v)})} />
-            <Button variant="primary" onClick={save}>Save changes</Button>
-          </BlockStack>
-        </Card>
-      </BlockStack>
-    </Page>
+    <div className="page-stack">
+      <section className="hero-block">
+        <h2>
+          Reward your <span>crown customers</span>
+          <br />
+          automatically
+        </h2>
+        <p>
+          CrownCustomers uses RFM scoring to identify your most valuable customers and
+          sends them personalized discount offers automatically.
+        </p>
+      </section>
+
+      <section className="panel panel-lg">
+        <div className="panel-head">
+          <div>
+            <h3>How RFM works</h3>
+            <p>Three signals that identify your best customers</p>
+          </div>
+          <Pill>Calculated weekly</Pill>
+        </div>
+        <div className="rfm-grid">
+          <div className="rfm-card">
+            <div className="rfm-letter gold">R</div>
+            <strong>Recency</strong>
+            <span>How recently did they buy?</span>
+          </div>
+          <div className="rfm-card">
+            <div className="rfm-letter blue">F</div>
+            <strong>Frequency</strong>
+            <span>How often do they buy?</span>
+          </div>
+          <div className="rfm-card">
+            <div className="rfm-letter green">M</div>
+            <strong>Monetary</strong>
+            <span>How much do they spend?</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="stats-grid">
+        <div className="panel stat-card">
+          <span>Total customers</span>
+          <strong>{stats.totalCustomers || 0}</strong>
+        </div>
+        <div className="panel stat-card">
+          <span>Crown customers</span>
+          <strong>{stats.topCustomers || 0}</strong>
+        </div>
+        <div className="panel stat-card">
+          <span>Recent activity</span>
+          <strong>{stats.emailsSent || 0}</strong>
+        </div>
+      </section>
+
+      <section className="split-grid">
+        <div className="panel action-panel">
+          <Pill tone="gold">STEP 01</Pill>
+          <h3>Sync your store</h3>
+          <p>
+            Import sample customers and orders to start calculating RFM scores and preview
+            the full CrownCustomers workflow.
+          </p>
+          <button className="primary-button" onClick={onSync} disabled={syncing}>
+            {syncing ? 'Syncing...' : 'Start sync'}
+          </button>
+        </div>
+
+        <div className="panel action-panel">
+          <Pill tone="gold">STEP 02</Pill>
+          <h3>Configure discount</h3>
+          <p>
+            Choose the coupon value sent to newly identified crown customers. You can
+            refine the full messaging later in Settings.
+          </p>
+          <div className="field-grid">
+            <label>
+              <span>Discount value</span>
+              <input
+                type="number"
+                value={quickDiscount.discountValue}
+                onChange={(event) =>
+                  setQuickDiscount((current) => ({
+                    ...current,
+                    discountValue: Number(event.target.value || 0)
+                  }))
+                }
+              />
+            </label>
+            <label>
+              <span>Type</span>
+              <select
+                value={quickDiscount.discountType}
+                onChange={(event) =>
+                  setQuickDiscount((current) => ({
+                    ...current,
+                    discountType: event.target.value
+                  }))
+                }
+              >
+                <option value="percentage">Percentage (%)</option>
+                <option value="fixed">Fixed amount</option>
+              </select>
+            </label>
+          </div>
+          <button className="secondary-button" onClick={onQuickDiscountSave}>
+            Save discount
+          </button>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h3>Customer ranking</h3>
+            <p>Top customers based on current RFM scoring</p>
+          </div>
+        </div>
+        {customers.length ? (
+          <div className="table-shell">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Spent</th>
+                  <th>Orders</th>
+                  <th>Score</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {customers.map((customer) => (
+                  <tr key={customer.id}>
+                    <td>{customer.name}</td>
+                    <td>{customer.email}</td>
+                    <td>${customer.totalSpent}</td>
+                    <td>{customer.ordersCount}</td>
+                    <td>{customer.rfmScore}</td>
+                    <td>
+                      <Pill tone={customer.isTop ? 'gold' : 'default'}>
+                        {customer.isTop ? 'Crown customer' : 'Regular'}
+                      </Pill>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty-state">
+            <div className="empty-icon">C</div>
+            <h3>No customers yet</h3>
+            <p>Run the demo sync to populate your first crown customer segments.</p>
+          </div>
+        )}
+      </section>
+
+      <section className="panel note-panel">
+        <strong>About CrownCustomers:</strong> CrownCustomers helps merchants identify loyal
+        repeat buyers using recency, frequency, and monetary behavior, then reward them
+        automatically.
+      </section>
+    </div>
   );
 }
 
-function Plan() {
+function ActivityPage({ logs }) {
   return (
-    <Page title="Plan">
-      <BlockStack gap="400">
-        <Card>
-          <BlockStack gap="200">
-            <InlineStack align="space-between"><Text variant="headingMd">Free</Text><Badge>Your current plan</Badge></InlineStack>
-            <Text>$0/month</Text><Divider />
-            <Text>· Up to 250 customers</Text><Text>· Automatic crown customer detection</Text><Text>· Up to 50 reward emails per month</Text>
-          </BlockStack>
-        </Card>
-        <Card>
-          <BlockStack gap="200">
-            <Text variant="headingMd">Pro</Text><Text>$15/month</Text><Divider />
-            <Text>· Up to 5,000 customers</Text><Text>· Unlimited emails</Text><Text>· Email subject and intro customization</Text><Text>· Priority email support</Text>
-            <Text fontWeight="bold">7 free trial days · no charge during trial · cancel anytime.</Text>
-            <Button variant="primary">Start 7-day trial</Button>
-          </BlockStack>
-        </Card>
-      </BlockStack>
-    </Page>
+    <div className="page-stack">
+      <div className="page-row">
+        <h2 className="section-title">Email Activity</h2>
+        <select className="filter-select" defaultValue="all">
+          <option value="all">All statuses</option>
+          <option value="synced">Synced</option>
+          <option value="settings_saved">Settings saved</option>
+        </select>
+      </div>
+
+      <section className="panel panel-xl">
+        {logs.length ? (
+          <div className="table-shell">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Status</th>
+                  <th>Customer</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody>
+                {logs.map((log) => (
+                  <tr key={log.id}>
+                    <td>{new Date(log.createdAt).toLocaleString()}</td>
+                    <td>{log.status}</td>
+                    <td>{log.customer}</td>
+                    <td>{log.message}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty-state">
+            <div className="empty-icon">A</div>
+            <h3>No activity yet</h3>
+            <p>
+              When a customer enters your crown segment for the first time, activity will
+              appear here.
+            </p>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function SettingsPage({ settings, setSettings, onSave }) {
+  const [section, setSection] = useState('status');
+
+  return (
+    <div className="settings-layout">
+      <div className="settings-tabs">
+        {SETTINGS_SECTIONS.map((item) => (
+          <button
+            key={item.key}
+            className={`settings-tab ${section === item.key ? 'active' : ''}`}
+            onClick={() => setSection(item.key)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="page-stack">
+        {section === 'status' && (
+          <section className="panel">
+            <h3>App status</h3>
+            <p>
+              When enabled, CrownCustomers sends a unique reward to each customer who enters
+              your crown segment for the first time.
+            </p>
+            <button
+              className={`toggle-card ${settings.enabled ? 'on' : ''}`}
+              onClick={() => setSettings((current) => ({ ...current, enabled: !current.enabled }))}
+            >
+              <span className="toggle-switch">
+                <span className="toggle-knob" />
+              </span>
+              <strong>{settings.enabled ? 'CrownCustomers enabled' : 'CrownCustomers disabled'}</strong>
+            </button>
+          </section>
+        )}
+
+        {section === 'discount' && (
+          <section className="panel">
+            <h3>Discount settings</h3>
+            <div className="field-grid">
+              <label>
+                <span>Discount value</span>
+                <input
+                  type="number"
+                  value={settings.discountValue}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      discountValue: Number(event.target.value || 0)
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>Type</span>
+                <select
+                  value={settings.discountType}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      discountType: event.target.value
+                    }))
+                  }
+                >
+                  <option value="percentage">Percentage (%)</option>
+                  <option value="fixed">Fixed amount</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              <span>Coupon duration (days)</span>
+              <input
+                type="number"
+                value={settings.couponDays}
+                onChange={(event) =>
+                  setSettings((current) => ({
+                    ...current,
+                    couponDays: Number(event.target.value || 0)
+                  }))
+                }
+              />
+            </label>
+          </section>
+        )}
+
+        {section === 'email' && (
+          <section className="panel">
+            <h3>Email content</h3>
+            <label>
+              <span>Email subject</span>
+              <input
+                value={settings.emailSubject}
+                onChange={(event) =>
+                  setSettings((current) => ({
+                    ...current,
+                    emailSubject: event.target.value
+                  }))
+                }
+              />
+            </label>
+            <label>
+              <span>Intro text</span>
+              <textarea
+                rows="5"
+                value={settings.introText}
+                onChange={(event) =>
+                  setSettings((current) => ({
+                    ...current,
+                    introText: event.target.value
+                  }))
+                }
+              />
+            </label>
+          </section>
+        )}
+
+        {section === 'cooldown' && (
+          <section className="panel">
+            <h3>Cooldown</h3>
+            <p>Control how often the same customer can receive a reward.</p>
+            <label>
+              <span>Cooldown days</span>
+              <input
+                type="number"
+                value={settings.cooldownDays}
+                onChange={(event) =>
+                  setSettings((current) => ({
+                    ...current,
+                    cooldownDays: Number(event.target.value || 0)
+                  }))
+                }
+              />
+            </label>
+          </section>
+        )}
+
+        <button className="primary-button save-button" onClick={onSave}>
+          Save changes
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PlanPage() {
+  return (
+    <div className="page-stack">
+      <section className="hero-block compact">
+        <h2>Choose your plan</h2>
+        <p>Scale with your store. Upgrade or cancel anytime.</p>
+      </section>
+
+      <section className="pricing-grid">
+        <div className="panel pricing-card">
+          <h3>Free</h3>
+          <div className="price-row">
+            <strong>$0</strong>
+            <span>/ month</span>
+          </div>
+          <ul>
+            <li>Up to 250 customers</li>
+            <li>Automatic crown customer detection</li>
+            <li>Up to 50 reward emails per month</li>
+          </ul>
+          <button className="ghost-button" disabled>
+            Your current plan
+          </button>
+        </div>
+
+        <div className="panel pricing-card featured">
+          <Pill tone="gold">7-DAY FREE TRIAL</Pill>
+          <h3>Pro</h3>
+          <div className="price-row">
+            <strong>$15</strong>
+            <span>/ month</span>
+          </div>
+          <ul>
+            <li>Up to 5,000 customers</li>
+            <li>Unlimited emails</li>
+            <li>Email subject and intro customization</li>
+            <li>Priority email support</li>
+            <li>Early access to upcoming features</li>
+          </ul>
+          <p className="subtle-copy">No charge during trial. Cancel anytime.</p>
+          <button className="primary-button">Start 7-day trial</button>
+        </div>
+      </section>
+
+      <section className="panel note-panel">
+        <strong>About the Free plan limit:</strong> If your store exceeds 250 customers,
+        CrownCustomers pauses new reward sends automatically, while still keeping RFM
+        scoring active.
+      </section>
+    </div>
   );
 }
 
 function App() {
-  const [page, setPage] = useState('dashboard');
-  const nav = <Navigation location="/"><Navigation.Section items={[
-    {label:'Dashboard', selected:page==='dashboard', onClick:()=>setPage('dashboard')},
-    {label:'Activity', selected:page==='activity', onClick:()=>setPage('activity')},
-    {label:'Settings', selected:page==='settings', onClick:()=>setPage('settings')},
-    {label:'Plan', selected:page==='plan', onClick:()=>setPage('plan')}
-  ]}/></Navigation>;
-  return <AppProvider i18n={{}}><Frame navigation={nav}>{page === 'dashboard' && <Dashboard />}{page === 'activity' && <Activity />}{page === 'settings' && <Settings />}{page === 'plan' && <Plan />}</Frame></AppProvider>;
+  const [page, setPage] = useState('overview');
+  const [dashboard, setDashboard] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [settings, setSettings] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function loadDashboard() {
+    const data = await getJson('/api/dashboard');
+    setDashboard(data);
+    setSettings((current) => current || data.settings);
+  }
+
+  async function loadLogs() {
+    const data = await getJson('/api/activity');
+    setLogs(data);
+  }
+
+  async function loadSettings() {
+    const data = await getJson('/api/settings');
+    setSettings(data);
+  }
+
+  async function refreshAll() {
+    await Promise.all([loadDashboard(), loadLogs(), loadSettings()]);
+  }
+
+  useEffect(() => {
+    refreshAll().catch(() => {});
+  }, []);
+
+  async function handleSync() {
+    setSyncing(true);
+    try {
+      await getJson('/api/sync-demo', { method: 'POST' });
+      await refreshAll();
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function handleSave() {
+    if (!settings) return;
+    setSaving(true);
+    try {
+      const updated = await getJson('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+      });
+      setSettings(updated);
+      await refreshAll();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const quickDiscount = useMemo(
+    () => ({
+      discountValue: settings?.discountValue ?? 15,
+      discountType: settings?.discountType ?? 'percentage'
+    }),
+    [settings]
+  );
+
+  if (!settings) {
+    return <div className="loading-screen">Loading CrownCustomers...</div>;
+  }
+
+  return (
+    <AppShell page={page} setPage={setPage} enabled={settings.enabled}>
+      {page === 'overview' && (
+        <OverviewPage
+          dashboard={dashboard}
+          settings={settings}
+          syncing={syncing}
+          onSync={handleSync}
+          quickDiscount={quickDiscount}
+          setQuickDiscount={(updater) =>
+            setSettings((current) => {
+              const nextDiscount =
+                typeof updater === 'function' ? updater(quickDiscount) : updater;
+              return {
+                ...current,
+                discountValue: nextDiscount.discountValue,
+                discountType: nextDiscount.discountType
+              };
+            })
+          }
+          onQuickDiscountSave={handleSave}
+        />
+      )}
+      {page === 'activity' && <ActivityPage logs={logs} />}
+      {page === 'settings' && (
+        <SettingsPage
+          settings={settings}
+          setSettings={setSettings}
+          onSave={handleSave}
+        />
+      )}
+      {page === 'plan' && <PlanPage />}
+      {saving && <div className="save-toast">Saving changes...</div>}
+    </AppShell>
+  );
 }
 
 createRoot(document.getElementById('root')).render(<App />);
