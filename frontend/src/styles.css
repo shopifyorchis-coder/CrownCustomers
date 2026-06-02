@@ -422,6 +422,10 @@ textarea {
   grid-template-columns: repeat(3, 1fr);
 }
 
+.sync-meta-grid {
+  margin-top: -2px;
+}
+
 .stat-card strong {
   display: block;
   margin-top: 8px;
@@ -430,6 +434,10 @@ textarea {
   font-size: 40px;
   font-weight: 800;
   letter-spacing: -0.06em;
+}
+
+.stat-card.compact strong {
+  font-size: 28px;
 }
 
 .split-grid {
@@ -731,6 +739,16 @@ li + li {
 
 .note-panel {
   border-left: 3px solid var(--gold);
+}
+
+.error-panel {
+  border-left: 3px solid #ff8d73;
+}
+
+.error-panel strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #fff1ec;
 }
 
 .filter-select {

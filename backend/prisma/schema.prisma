@@ -22,15 +22,32 @@ model ShopSettings {
 }
 
 model CustomerScore {
-  id          Int      @id @default(autoincrement())
-  customerId  String
-  name        String
-  email       String
-  totalSpent  Float    @default(0)
-  ordersCount Int      @default(0)
-  rfmScore    Int      @default(0)
-  isTop       Boolean  @default(false)
-  createdAt   DateTime @default(now())
+  id            Int      @id @default(autoincrement())
+  shop          String   @default("demo-shop.myshopify.com")
+  customerId    String
+  name          String
+  email         String
+  totalSpent    Float    @default(0)
+  ordersCount   Int      @default(0)
+  lastOrderDate DateTime @default(now())
+  rfmScore      Int      @default(0)
+  segment       String   @default("Regular Customer")
+  isTop         Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+
+  @@unique([shop, customerId])
+  @@index([shop, rfmScore])
+}
+
+model SyncState {
+  id                Int      @id @default(autoincrement())
+  shop              String   @unique
+  lastSyncAt        DateTime?
+  customersImported Int      @default(0)
+  ordersImported    Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
 
 model ActivityLog {

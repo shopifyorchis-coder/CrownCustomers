@@ -4,6 +4,10 @@ import './styles.css';
 
 const API_BASE =
   import.meta.env.VITE_API_URL || 'https://crowncustomers-production.up.railway.app';
+const SHOP =
+  new URLSearchParams(window.location.search).get('shop') ||
+  import.meta.env.VITE_SHOPIFY_SHOP_DOMAIN ||
+  '';
 
 const NAV_ITEMS = [
   { key: 'overview', label: 'Overview', section: 'MAIN', icon: 'grid' },
@@ -20,9 +24,22 @@ const SETTINGS_SECTIONS = [
 ];
 
 async function getJson(path, options) {
-  const response = await fetch(`${API_BASE}${path}`, options);
+  const requestOptions = {
+    ...options,
+    headers: {
+      ...(SHOP ? { 'X-Shopify-Shop-Domain': SHOP } : {}),
+      ...(options?.headers || {})
+    }
+  };
+  const response = await fetch(`${API_BASE}${path}`, requestOptions);
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      payload = null;
+    }
+    throw new Error(payload?.error || `Request failed: ${response.status}`);
   }
   return response.json();
 }
@@ -86,9 +103,9 @@ function AppShell({ page, setPage, enabled, children }) {
   );
 }
 
-function OverviewPage({ dashboard, settings, onSync, syncing, onQuickDiscountSave, quickDiscount, setQuickDiscount }) {
-  const stats = dashboard?.stats || {};
-  const customers = dashboard?.customers || [];
+function OverviewPage({ summary, ranking, syncError, onSync, syncing, onQuickDiscountSave, quickDiscount, setQuickDiscount }) {
+  const stats = summary || {};
+  const customers = ranking || [];
 
   return (
     <div className="page-stack">
@@ -103,6 +120,13 @@ function OverviewPage({ dashboard, settings, onSync, syncing, onQuickDiscountSav
           sends them personalized discount offers automatically.
         </p>
       </section>
+
+      {syncError && (
+        <section className="panel error-panel">
+          <strong>Sync failed</strong>
+          <p>{syncError}</p>
+        </section>
+      )}
 
       <section className="panel panel-lg">
         <div className="panel-head">
@@ -138,11 +162,26 @@ function OverviewPage({ dashboard, settings, onSync, syncing, onQuickDiscountSav
         </div>
         <div className="panel stat-card">
           <span>Crown customers</span>
-          <strong>{stats.topCustomers || 0}</strong>
+          <strong>{stats.crownCustomers || 0}</strong>
         </div>
         <div className="panel stat-card">
+          <span>Last sync</span>
+          <strong>{stats.lastSyncAt ? new Date(stats.lastSyncAt).toLocaleDateString() : 'Never'}</strong>
+        </div>
+      </section>
+
+      <section className="stats-grid sync-meta-grid">
+        <div className="panel stat-card compact">
+          <span>Orders imported</span>
+          <strong>{stats.ordersImported || 0}</strong>
+        </div>
+        <div className="panel stat-card compact">
+          <span>Customers imported</span>
+          <strong>{stats.customersImported || 0}</strong>
+        </div>
+        <div className="panel stat-card compact">
           <span>Recent activity</span>
-          <strong>{stats.emailsSent || 0}</strong>
+          <strong>{stats.recentActivityCount || 0}</strong>
         </div>
       </section>
 
@@ -151,8 +190,7 @@ function OverviewPage({ dashboard, settings, onSync, syncing, onQuickDiscountSav
           <Pill tone="gold">STEP 01</Pill>
           <h3>Sync your store</h3>
           <p>
-            Import sample customers and orders to start calculating RFM scores and preview
-            the full CrownCustomers workflow.
+            Import real Shopify orders and calculate customer scores.
           </p>
           <button className="primary-button" onClick={onSync} disabled={syncing}>
             {syncing ? 'Syncing...' : 'Start sync'}
@@ -218,8 +256,9 @@ function OverviewPage({ dashboard, settings, onSync, syncing, onQuickDiscountSav
                   <th>Email</th>
                   <th>Spent</th>
                   <th>Orders</th>
+                  <th>Last order</th>
                   <th>Score</th>
-                  <th>Status</th>
+                  <th>Segment</th>
                 </tr>
               </thead>
               <tbody>
@@ -229,10 +268,11 @@ function OverviewPage({ dashboard, settings, onSync, syncing, onQuickDiscountSav
                     <td>{customer.email}</td>
                     <td>${customer.totalSpent}</td>
                     <td>{customer.ordersCount}</td>
+                    <td>{new Date(customer.lastOrderDate).toLocaleDateString()}</td>
                     <td>{customer.rfmScore}</td>
                     <td>
                       <Pill tone={customer.isTop ? 'gold' : 'default'}>
-                        {customer.isTop ? 'Crown customer' : 'Regular'}
+                        {customer.segment}
                       </Pill>
                     </td>
                   </tr>
@@ -243,8 +283,8 @@ function OverviewPage({ dashboard, settings, onSync, syncing, onQuickDiscountSav
         ) : (
           <div className="empty-state">
             <div className="empty-icon">C</div>
-            <h3>No customers yet</h3>
-            <p>Run the demo sync to populate your first crown customer segments.</p>
+            <h3>No customers synced yet</h3>
+            <p>Click Start Sync to import Shopify order history.</p>
           </div>
         )}
       </section>
@@ -510,17 +550,23 @@ function PlanPage() {
 
 function App() {
   const [page, setPage] = useState('overview');
-  const [dashboard, setDashboard] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [ranking, setRanking] = useState([]);
   const [logs, setLogs] = useState([]);
   const [settings, setSettings] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [syncError, setSyncError] = useState('');
 
-  async function loadDashboard() {
-    const data = await getJson('/api/dashboard');
-    setDashboard(data);
-    setSettings((current) => current || data.settings);
+  async function loadSummary() {
+    const data = await getJson('/api/dashboard/summary');
+    setSummary(data);
+  }
+
+  async function loadRanking() {
+    const data = await getJson('/api/customers/ranking');
+    setRanking(data);
   }
 
   async function loadLogs() {
@@ -535,7 +581,7 @@ function App() {
 
   async function refreshAll() {
     await getJson('/api/health');
-    await Promise.all([loadDashboard(), loadLogs(), loadSettings()]);
+    await Promise.all([loadSummary(), loadRanking(), loadLogs(), loadSettings()]);
     setError('');
   }
 
@@ -548,9 +594,12 @@ function App() {
 
   async function handleSync() {
     setSyncing(true);
+    setSyncError('');
     try {
-      await getJson('/api/sync-demo', { method: 'POST' });
+      await getJson('/api/sync/shopify-orders', { method: 'POST' });
       await refreshAll();
+    } catch (err) {
+      setSyncError(err.message || 'Shopify sync failed.');
     } finally {
       setSyncing(false);
     }
@@ -608,8 +657,9 @@ function App() {
     <AppShell page={page} setPage={setPage} enabled={settings.enabled}>
       {page === 'overview' && (
         <OverviewPage
-          dashboard={dashboard}
-          settings={settings}
+          summary={summary}
+          ranking={ranking}
+          syncError={syncError}
           syncing={syncing}
           onSync={handleSync}
           quickDiscount={quickDiscount}
