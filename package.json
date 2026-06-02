@@ -1,0 +1,6 @@
+{
+  "name": "crowncustomers",
+  "scripts": {
+    "start": "cd backend && npm start"
+  }
+}
