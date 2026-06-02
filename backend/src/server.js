@@ -74,8 +74,23 @@ function buildSegment({ isTop, rfmScore, recencyScore, frequencyScore, monetaryS
   return 'Regular Customer';
 }
 
+function buildSimpleSegment({ isTop, score }) {
+  if (isTop) return 'Crown Customer';
+  if (score >= 10) return 'Gold Customer';
+  if (score <= 5) return 'At Risk';
+  return 'Regular Customer';
+}
+
 function getMissingScopeMessage() {
   return 'Missing Shopify order/customer permissions. Please reinstall the app with updated scopes.';
+}
+
+function normalizeManualDate(dateValue) {
+  const parsed = new Date(dateValue);
+  if (Number.isNaN(parsed.getTime())) {
+    return new Date();
+  }
+  return parsed;
 }
 
 async function getOrCreateSettings(shop) {
@@ -308,6 +323,190 @@ async function persistRankings(shop, rankedCustomers, ordersImported) {
   });
 }
 
+function buildSimpleRankings(shop, customers) {
+  const normalizedCustomers = customers.map((customer, index) => ({
+    shop,
+    customerId: customer.customerId || `manual:${customer.email.toLowerCase() || index}`,
+    name: customer.name?.trim() || 'Guest Customer',
+    email: customer.email?.trim().toLowerCase() || `customer-${index + 1}@example.com`,
+    totalSpent: Number(toCurrencyNumber(customer.totalSpent).toFixed(2)),
+    ordersCount: Math.max(0, Number(customer.ordersCount || 0)),
+    lastOrderDate: normalizeManualDate(customer.lastOrderDate)
+  }));
+
+  const recencyValues = normalizedCustomers.map((customer) => daysSince(customer.lastOrderDate));
+  const frequencyValues = normalizedCustomers.map((customer) => customer.ordersCount);
+  const monetaryValues = normalizedCustomers.map((customer) => customer.totalSpent);
+
+  const enriched = normalizedCustomers.map((customer) => {
+    const recencyScore = scoreAscending(recencyValues, daysSince(customer.lastOrderDate));
+    const frequencyScore = scoreDescending(frequencyValues, customer.ordersCount);
+    const monetaryScore = scoreDescending(monetaryValues, customer.totalSpent);
+    const simpleScore = recencyScore + frequencyScore + monetaryScore;
+
+    return {
+      ...customer,
+      recencyScore,
+      frequencyScore,
+      monetaryScore,
+      rfmScore: simpleScore
+    };
+  });
+
+  const ranked = enriched.sort((a, b) => {
+    if (b.rfmScore !== a.rfmScore) return b.rfmScore - a.rfmScore;
+    if (b.totalSpent !== a.totalSpent) return b.totalSpent - a.totalSpent;
+    return new Date(b.lastOrderDate) - new Date(a.lastOrderDate);
+  });
+
+  const topCount = ranked.length ? Math.max(1, Math.ceil(ranked.length * 0.2)) : 0;
+
+  return ranked.map((customer, index) => {
+    const isTop = index < topCount;
+    return {
+      shop,
+      customerId: customer.customerId,
+      name: customer.name,
+      email: customer.email,
+      totalSpent: customer.totalSpent,
+      ordersCount: customer.ordersCount,
+      lastOrderDate: customer.lastOrderDate,
+      rfmScore: customer.rfmScore,
+      segment: buildSimpleSegment({
+        isTop,
+        score: customer.rfmScore
+      }),
+      isTop
+    };
+  });
+}
+
+async function upsertRankedCustomers(shop, rankedCustomers) {
+  for (const customer of rankedCustomers) {
+    await prisma.customerScore.upsert({
+      where: {
+        shop_customerId: {
+          shop,
+          customerId: customer.customerId
+        }
+      },
+      update: {
+        name: customer.name,
+        email: customer.email,
+        totalSpent: customer.totalSpent,
+        ordersCount: customer.ordersCount,
+        lastOrderDate: customer.lastOrderDate,
+        rfmScore: customer.rfmScore,
+        segment: customer.segment,
+        isTop: customer.isTop
+      },
+      create: customer
+    });
+  }
+}
+
+async function recomputeManualScores(shop) {
+  const existingCustomers = await prisma.customerScore.findMany({
+    where: { shop },
+    orderBy: { updatedAt: 'desc' }
+  });
+  const rankedCustomers = buildSimpleRankings(shop, existingCustomers);
+  await upsertRankedCustomers(shop, rankedCustomers);
+  return rankedCustomers;
+}
+
+async function seedPreviewCustomers(shop) {
+  const existingCustomers = await prisma.customerScore.findMany({ where: { shop } });
+  if (existingCustomers.length) {
+    return recomputeManualScores(shop);
+  }
+
+  const previewCustomers = [
+    {
+      customerId: 'preview:sarah-chen',
+      name: 'Sarah Chen',
+      email: 'sarah.chen@example.com',
+      totalSpent: 1240,
+      ordersCount: 8,
+      lastOrderDate: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000)
+    },
+    {
+      customerId: 'preview:michael-ross',
+      name: 'Michael Ross',
+      email: 'michael.ross@example.com',
+      totalSpent: 890,
+      ordersCount: 6,
+      lastOrderDate: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000)
+    },
+    {
+      customerId: 'preview:amelia-jones',
+      name: 'Amelia Jones',
+      email: 'amelia.jones@example.com',
+      totalSpent: 560,
+      ordersCount: 4,
+      lastOrderDate: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
+    },
+    {
+      customerId: 'preview:noah-patel',
+      name: 'Noah Patel',
+      email: 'noah.patel@example.com',
+      totalSpent: 230,
+      ordersCount: 2,
+      lastOrderDate: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000)
+    }
+  ];
+
+  const rankedCustomers = buildSimpleRankings(shop, previewCustomers);
+
+  await prisma.$transaction(async (tx) => {
+    for (const customer of rankedCustomers) {
+      await tx.customerScore.upsert({
+        where: {
+          shop_customerId: {
+            shop,
+            customerId: customer.customerId
+          }
+        },
+        update: {
+          name: customer.name,
+          email: customer.email,
+          totalSpent: customer.totalSpent,
+          ordersCount: customer.ordersCount,
+          lastOrderDate: customer.lastOrderDate,
+          rfmScore: customer.rfmScore,
+          segment: customer.segment,
+          isTop: customer.isTop
+        },
+        create: customer
+      });
+    }
+
+    await tx.syncState.upsert({
+      where: { shop },
+      update: {
+        lastSyncAt: new Date(),
+        customersImported: rankedCustomers.length
+      },
+      create: {
+        shop,
+        lastSyncAt: new Date(),
+        customersImported: rankedCustomers.length,
+        ordersImported: 0
+      }
+    });
+
+    await tx.activityLog.create({
+      data: {
+        status: 'preview_sync',
+        customer: shop,
+        message: `Loaded ${rankedCustomers.length} preview customers for UI testing.`
+      }
+    });
+  });
+
+  return rankedCustomers;
+}
+
 async function getDashboardSummary(shop) {
   const [totalCustomers, crownCustomers, recentActivityCount, syncState] = await Promise.all([
     prisma.customerScore.count({ where: { shop } }),
@@ -355,6 +554,87 @@ app.get('/api/customers/ranking', async (req, res) => {
   res.json(await getRankedCustomers(shop));
 });
 
+app.post('/api/customers/manual', async (req, res) => {
+  const shop = getCurrentShop(req);
+  const body = req.body || {};
+  const name = String(body.name || '').trim();
+  const email = String(body.email || '').trim().toLowerCase();
+  const totalSpent = Number(body.totalSpent || 0);
+  const ordersCount = Number(body.ordersCount || 0);
+  const lastOrderDate = normalizeManualDate(body.lastOrderDate);
+
+  if (!name || !email) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Name and email are required.'
+    });
+  }
+
+  if (!Number.isFinite(totalSpent) || !Number.isFinite(ordersCount)) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Total spent and orders count must be valid numbers.'
+    });
+  }
+
+  const customerId = `manual:${email}`;
+
+  await prisma.customerScore.upsert({
+    where: {
+      shop_customerId: {
+        shop,
+        customerId
+      }
+    },
+    update: {
+      name,
+      email,
+      totalSpent: Number(totalSpent.toFixed(2)),
+      ordersCount: Math.max(0, Math.round(ordersCount)),
+      lastOrderDate
+    },
+    create: {
+      shop,
+      customerId,
+      name,
+      email,
+      totalSpent: Number(totalSpent.toFixed(2)),
+      ordersCount: Math.max(0, Math.round(ordersCount)),
+      lastOrderDate
+    }
+  });
+
+  const rankedCustomers = await recomputeManualScores(shop);
+
+  await prisma.syncState.upsert({
+    where: { shop },
+    update: {
+      lastSyncAt: new Date(),
+      customersImported: rankedCustomers.length
+    },
+    create: {
+      shop,
+      lastSyncAt: new Date(),
+      customersImported: rankedCustomers.length,
+      ordersImported: 0
+    }
+  });
+
+  await prisma.activityLog.create({
+    data: {
+      status: 'manual_customer_added',
+      customer: shop,
+      message: `Added manual customer ${name}.`
+    }
+  });
+
+  res.json({
+    ok: true,
+    message: 'Manual customer added.',
+    customerId
+  });
+});
+
 app.get('/api/dashboard', async (req, res) => {
   const shop = getCurrentShop(req);
   const [settings, summary, customers, activities] = await Promise.all([
@@ -388,15 +668,28 @@ app.post('/api/sync/shopify-orders', async (req, res) => {
   const accessToken = getShopifyAccessToken();
 
   if (!accessToken) {
-    return res.status(400).json({
-      ok: false,
-      error: 'Missing Shopify admin access token. Set SHOPIFY_ADMIN_ACCESS_TOKEN in backend environment variables.',
-      requiredScopes: REQUIRED_SHOPIFY_SCOPES
+    const previewCustomers = await seedPreviewCustomers(shop);
+    return res.json({
+      ok: true,
+      shop,
+      mode: 'preview',
+      customersImported: previewCustomers.length,
+      ordersImported: 0,
+      message: 'Preview customers loaded for UI testing.'
     });
   }
 
   try {
     const orders = await fetchShopifyOrders(shop, accessToken);
+    if (!orders.length) {
+      return res.json({
+        ok: true,
+        shop,
+        customersImported: 0,
+        ordersImported: 0,
+        message: 'No customers found yet. Add customers manually or connect Shopify sync later.'
+      });
+    }
     const rankedCustomers = buildRankingsFromOrders(shop, orders);
 
     await persistRankings(shop, rankedCustomers, orders.length);

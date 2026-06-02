@@ -48,6 +48,15 @@ function Pill({ children, tone = 'default' }) {
   return <span className={`pill pill-${tone}`}>{children}</span>;
 }
 
+function formatCurrency(value) {
+  const amount = Number(value || 0);
+  return amount.toLocaleString(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0
+  });
+}
+
 function AppShell({ page, setPage, enabled, children }) {
   return (
     <div className="app-shell">
@@ -103,7 +112,21 @@ function AppShell({ page, setPage, enabled, children }) {
   );
 }
 
-function OverviewPage({ summary, ranking, syncError, onSync, syncing, onQuickDiscountSave, quickDiscount, setQuickDiscount }) {
+function OverviewPage({
+  summary,
+  ranking,
+  syncError,
+  syncMessage,
+  onSync,
+  syncing,
+  manualForm,
+  onManualChange,
+  onManualSubmit,
+  addingManual,
+  onQuickDiscountSave,
+  quickDiscount,
+  setQuickDiscount
+}) {
   const stats = summary || {};
   const customers = ranking || [];
 
@@ -125,6 +148,13 @@ function OverviewPage({ summary, ranking, syncError, onSync, syncing, onQuickDis
         <section className="panel error-panel">
           <strong>Sync failed</strong>
           <p>{syncError}</p>
+        </section>
+      )}
+
+      {!syncError && syncMessage && (
+        <section className="panel info-panel">
+          <strong>Sync update</strong>
+          <p>{syncMessage}</p>
         </section>
       )}
 
@@ -167,21 +197,6 @@ function OverviewPage({ summary, ranking, syncError, onSync, syncing, onQuickDis
         <div className="panel stat-card">
           <span>Last sync</span>
           <strong>{stats.lastSyncAt ? new Date(stats.lastSyncAt).toLocaleDateString() : 'Never'}</strong>
-        </div>
-      </section>
-
-      <section className="stats-grid sync-meta-grid">
-        <div className="panel stat-card compact">
-          <span>Orders imported</span>
-          <strong>{stats.ordersImported || 0}</strong>
-        </div>
-        <div className="panel stat-card compact">
-          <span>Customers imported</span>
-          <strong>{stats.customersImported || 0}</strong>
-        </div>
-        <div className="panel stat-card compact">
-          <span>Recent activity</span>
-          <strong>{stats.recentActivityCount || 0}</strong>
         </div>
       </section>
 
@@ -243,6 +258,68 @@ function OverviewPage({ summary, ranking, syncError, onSync, syncing, onQuickDis
       <section className="panel">
         <div className="panel-head">
           <div>
+            <h3>Add a customer manually</h3>
+            <p>Create local test customers and see the ranking table update right away.</p>
+          </div>
+          <Pill tone="gold">UI TESTING</Pill>
+        </div>
+        <div className="field-grid field-grid-manual">
+          <label>
+            <span>Name</span>
+            <input
+              value={manualForm.name}
+              onChange={(event) => onManualChange('name', event.target.value)}
+              placeholder="Sarah Chen"
+            />
+          </label>
+          <label>
+            <span>Email</span>
+            <input
+              type="email"
+              value={manualForm.email}
+              onChange={(event) => onManualChange('email', event.target.value)}
+              placeholder="sarah@example.com"
+            />
+          </label>
+          <label>
+            <span>Total spent</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={manualForm.totalSpent}
+              onChange={(event) => onManualChange('totalSpent', event.target.value)}
+              placeholder="750"
+            />
+          </label>
+          <label>
+            <span>Orders count</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={manualForm.ordersCount}
+              onChange={(event) => onManualChange('ordersCount', event.target.value)}
+              placeholder="5"
+            />
+          </label>
+          <label className="field-span-2">
+            <span>Last purchase date</span>
+            <input
+              type="date"
+              value={manualForm.lastOrderDate}
+              onChange={(event) => onManualChange('lastOrderDate', event.target.value)}
+            />
+          </label>
+        </div>
+        <button className="primary-button" onClick={onManualSubmit} disabled={addingManual}>
+          {addingManual ? 'Adding customer...' : 'Add customer'}
+        </button>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <div>
             <h3>Customer ranking</h3>
             <p>Top customers based on current RFM scoring</p>
           </div>
@@ -266,7 +343,7 @@ function OverviewPage({ summary, ranking, syncError, onSync, syncing, onQuickDis
                   <tr key={customer.id}>
                     <td>{customer.name}</td>
                     <td>{customer.email}</td>
-                    <td>${customer.totalSpent}</td>
+                    <td>{formatCurrency(customer.totalSpent)}</td>
                     <td>{customer.ordersCount}</td>
                     <td>{new Date(customer.lastOrderDate).toLocaleDateString()}</td>
                     <td>{customer.rfmScore}</td>
@@ -283,8 +360,8 @@ function OverviewPage({ summary, ranking, syncError, onSync, syncing, onQuickDis
         ) : (
           <div className="empty-state">
             <div className="empty-icon">C</div>
-            <h3>No customers synced yet</h3>
-            <p>Click Start Sync to import Shopify order history.</p>
+            <h3>No customers found yet</h3>
+            <p>No customers found yet. Add customers manually or connect Shopify sync later.</p>
           </div>
         )}
       </section>
@@ -556,8 +633,17 @@ function App() {
   const [settings, setSettings] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [addingManual, setAddingManual] = useState(false);
   const [error, setError] = useState('');
   const [syncError, setSyncError] = useState('');
+  const [syncMessage, setSyncMessage] = useState('');
+  const [manualForm, setManualForm] = useState({
+    name: '',
+    email: '',
+    totalSpent: '750',
+    ordersCount: '4',
+    lastOrderDate: new Date().toISOString().slice(0, 10)
+  });
 
   async function loadSummary() {
     const data = await getJson('/api/dashboard/summary');
@@ -595,13 +681,47 @@ function App() {
   async function handleSync() {
     setSyncing(true);
     setSyncError('');
+    setSyncMessage('');
     try {
-      await getJson('/api/sync/shopify-orders', { method: 'POST' });
+      const result = await getJson('/api/sync/shopify-orders', { method: 'POST' });
       await refreshAll();
+      setSyncMessage(
+        result.message ||
+          `Loaded ${result.customersImported || 0} customers into CrownCustomers.`
+      );
     } catch (err) {
       setSyncError(err.message || 'Shopify sync failed.');
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function handleManualSubmit() {
+    setAddingManual(true);
+    setSyncError('');
+    setSyncMessage('');
+    try {
+      const payload = {
+        ...manualForm,
+        totalSpent: Number(manualForm.totalSpent || 0),
+        ordersCount: Number(manualForm.ordersCount || 0)
+      };
+      await getJson('/api/customers/manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      await refreshAll();
+      setSyncMessage(`Added ${payload.name || 'customer'} to the ranking table.`);
+      setManualForm((current) => ({
+        ...current,
+        name: '',
+        email: ''
+      }));
+    } catch (err) {
+      setSyncError(err.message || 'Unable to add customer right now.');
+    } finally {
+      setAddingManual(false);
     }
   }
 
@@ -660,8 +780,18 @@ function App() {
           summary={summary}
           ranking={ranking}
           syncError={syncError}
+          syncMessage={syncMessage}
           syncing={syncing}
           onSync={handleSync}
+          manualForm={manualForm}
+          onManualChange={(field, value) =>
+            setManualForm((current) => ({
+              ...current,
+              [field]: value
+            }))
+          }
+          onManualSubmit={handleManualSubmit}
+          addingManual={addingManual}
           quickDiscount={quickDiscount}
           setQuickDiscount={(updater) =>
             setSettings((current) => {
