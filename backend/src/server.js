@@ -1,11 +1,13 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const { prisma } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 const SHOP = 'demo-shop.myshopify.com';
+const frontendDist = path.resolve(__dirname, '../../frontend/dist');
 
 app.use(cors());
 app.use(express.json());
@@ -85,6 +87,12 @@ app.post('/api/settings', async (req, res) => {
 app.get('/api/activity', async (req, res) => {
   const logs = await prisma.activityLog.findMany({ orderBy: { createdAt: 'desc' }, take: 50 });
   res.json(logs);
+});
+
+app.use(express.static(frontendDist));
+
+app.get('*', (req, res) => {
+  res.sendFile(path.join(frontendDist, 'index.html'));
 });
 
 app.listen(PORT, () => {

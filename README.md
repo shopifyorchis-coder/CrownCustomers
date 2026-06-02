@@ -49,8 +49,10 @@ This package uses SQLite so it works quickly on your PC without Railway/Postgres
 
 For Railway:
 
-- Point the service at the `backend` folder, or keep the repo root start command as provided here.
+- Use the repo root service so Railway can build the frontend and start the backend together.
 - Use a PostgreSQL `DATABASE_URL` instead of `file:./prisma/dev.db`.
 - Run `npx prisma db push` during setup or in a one-off Railway shell after the database URL is in place.
 
 SQLite can appear to work on Railway, but the filesystem is not a durable production database.
+
+The deployed backend serves the built frontend, so the Railway public domain opens the full app UI.
