@@ -1,6 +1,5 @@
 {
-  "name": "crowncustomers",
   "scripts": {
-    "start": "cd backend && npm start"
+    "start": "cd backend && npx prisma generate && npx prisma db push && npm start"
   }
 }
