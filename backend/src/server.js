@@ -104,6 +104,22 @@ function normalizeManualDate(dateValue) {
   return parsed;
 }
 
+function normalizeErrors(errors) {
+  if (!errors) return [];
+  if (Array.isArray(errors)) return errors;
+  if (typeof errors === 'string') return [{ message: errors }];
+  if (typeof errors === 'object') return [errors];
+  return [{ message: String(errors) }];
+}
+
+function buildReadableErrorMessage(errors, fallbackMessage) {
+  const normalized = normalizeErrors(errors);
+  const messages = normalized
+    .map((entry) => entry?.message || String(entry))
+    .filter(Boolean);
+  return messages.join('; ') || fallbackMessage;
+}
+
 function sanitizeCouponName(name) {
   return (name || 'CUSTOMER')
     .split(' ')[0]
@@ -175,18 +191,20 @@ async function postShopifyGraphQL(shop, accessToken, query, variables, missingSc
   });
 
   const payload = await response.json();
-  const topLevelErrors = payload.errors || [];
+  const topLevelErrors = normalizeErrors(payload.errors);
 
   console.log('[coupon_generation] Shopify GraphQL response', {
     shop,
     status: response.status,
+    rawPayload: payload,
     topLevelErrors
   });
 
   if (!response.ok || topLevelErrors.length) {
-    const message =
-      topLevelErrors.map((entry) => entry.message).join('; ') ||
-      `Shopify API request failed: ${response.status}`;
+    const message = buildReadableErrorMessage(
+      topLevelErrors,
+      `Shopify API request failed: ${response.status}`
+    );
     throw buildShopifyGraphQLError(message, missingScopeMessage);
   }
 
@@ -263,8 +281,11 @@ async function fetchShopifyOrders(shop, accessToken) {
     const payload = await response.json();
 
     if (!response.ok || payload.errors || payload.data?.orders == null) {
-      const graphQlErrors = payload.errors || [];
-      const errorMessage = graphQlErrors.map((entry) => entry.message).join('; ') || `Shopify API request failed: ${response.status}`;
+      const graphQlErrors = normalizeErrors(payload.errors);
+      const errorMessage = buildReadableErrorMessage(
+        graphQlErrors,
+        `Shopify API request failed: ${response.status}`
+      );
       const missingScopes = errorMessage.toLowerCase().includes('access denied') || errorMessage.toLowerCase().includes('scope');
       const err = new Error(missingScopes ? getMissingScopeMessage() : errorMessage);
       err.statusCode = missingScopes ? 403 : 502;
@@ -341,7 +362,7 @@ async function createShopifyDiscountCode({ shop, token, customer, settings }) {
     getMissingDiscountScopeMessage()
   );
   const result = response.data?.discountCodeBasicCreate;
-  const userErrors = result?.userErrors || [];
+  const userErrors = normalizeErrors(result?.userErrors);
 
   console.log('[coupon_generation] discountCodeBasicCreate result', {
     shop,
@@ -352,9 +373,10 @@ async function createShopifyDiscountCode({ shop, token, customer, settings }) {
   });
 
   if (!result?.codeDiscountNode?.id || userErrors.length) {
-    const message =
-      userErrors.map((entry) => entry.message).join('; ') ||
-      'Shopify did not return a discount id.';
+    const message = buildReadableErrorMessage(
+      userErrors,
+      'Shopify did not return a discount id.'
+    );
     throw buildShopifyGraphQLError(message, getMissingDiscountScopeMessage());
   }
 
