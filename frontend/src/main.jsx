@@ -129,6 +129,7 @@ function OverviewPage({
     (customer) => customer.isTop || customer.segment === 'Crown Customer'
   );
   const displayCustomers = topCustomers.length ? topCustomers : customers;
+
   return (
     <div className="page-stack">
       <section className="hero-block">
@@ -203,9 +204,7 @@ function OverviewPage({
         <div className="panel action-panel">
           <Pill tone="gold">STEP 01</Pill>
           <h3>Sync your store</h3>
-          <p>
-            Import real Shopify orders and calculate customer scores.
-          </p>
+          <p>Import real Shopify orders and calculate customer scores.</p>
           <button className="primary-button" onClick={onSync} disabled={syncing}>
             {syncing ? 'Syncing...' : stats.totalCustomers ? 'Re-sync' : 'Start sync'}
           </button>
@@ -295,64 +294,6 @@ function OverviewPage({
         )}
       </section>
 
-      <section className="panel">
-        <div className="panel-head">
-          <div>
-            <h3>Recent coupons</h3>
-            <p>Latest Shopify reward codes created for crown customers</p>
-          </div>
-        </div>
-        {recentCoupons.length ? (
-          <div className="table-shell">
-            <table>
-              <thead>
-                <tr>
-                  <th>Customer</th>
-                  <th>Code</th>
-                  <th>Value</th>
-                  <th>Expiry</th>
-                  <th>Status</th>
-                  <th>Error reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentCoupons.map((coupon, index) => (
-                  <tr key={`${coupon.customerEmail}-${coupon.discountCode || 'coupon'}-${index}`}>
-                    <td>{coupon.customerName || coupon.customerEmail}</td>
-                    <td>{coupon.discountCode || 'Not generated'}</td>
-                    <td>
-                      {coupon.discountType === 'percentage'
-                        ? `${coupon.discountValue}%`
-                        : formatCurrency(coupon.discountValue)}
-                    </td>
-                    <td>{coupon.endsAt ? new Date(coupon.endsAt).toLocaleDateString() : '—'}</td>
-                    <td>
-                      <Pill
-                        tone={
-                          coupon.status === 'created'
-                            ? 'success'
-                            : coupon.status === 'skipped'
-                              ? 'gold'
-                              : 'default'
-                        }
-                      >
-                        {coupon.status}
-                      </Pill>
-                    </td>
-                    <td>{coupon.errorMessage || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="empty-state empty-state-sm">
-            <h3>No reward coupons yet</h3>
-            <p>Generate reward coupons to create real Shopify discount codes for your crown customers.</p>
-          </div>
-        )}
-      </section>
-
       <section className="panel note-panel">
         <strong>About CrownCustomers:</strong> CrownCustomers helps merchants identify loyal
         repeat buyers using recency, frequency, and monetary behavior, then reward them
@@ -364,9 +305,8 @@ function OverviewPage({
 
 function ActivityPage({ logs }) {
   const [statusFilter, setStatusFilter] = useState('all');
-  const filteredLogs = statusFilter === 'all'
-    ? logs
-    : logs.filter((log) => log.status === statusFilter);
+  const filteredLogs =
+    statusFilter === 'all' ? logs : logs.filter((log) => log.status === statusFilter);
 
   return (
     <div className="page-stack activity-page">
@@ -719,13 +659,16 @@ function App() {
           {error && (
             <>
               <p className="loading-error">{error}</p>
-              <button className="primary-button" onClick={() => {
-                setError('');
-                refreshAll().catch((err) => {
-                  console.error('CrownCustomers retry failed:', err);
-                  setError(err.message || 'Unable to load CrownCustomers right now.');
-                });
-              }}>
+              <button
+                className="primary-button"
+                onClick={() => {
+                  setError('');
+                  refreshAll().catch((err) => {
+                    console.error('CrownCustomers retry failed:', err);
+                    setError(err.message || 'Unable to load CrownCustomers right now.');
+                  });
+                }}
+              >
                 Retry
               </button>
             </>
