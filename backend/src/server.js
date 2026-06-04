@@ -104,16 +104,16 @@ function normalizeManualDate(dateValue) {
   return parsed;
 }
 
-function toErrorArray(value) {
+const normalizeErrorList = (value) => {
   if (!value) return [];
   if (Array.isArray(value)) return value;
   if (typeof value === 'string') return [{ message: value }];
   if (typeof value === 'object') return [value];
   return [{ message: String(value) }];
-}
+};
 
 function formatShopifyErrors(value) {
-  return toErrorArray(value)
+  return normalizeErrorList(value)
     .map((err) => {
       if (!err) return 'Unknown Shopify error';
       if (typeof err === 'string') return err;
@@ -202,9 +202,9 @@ async function postShopifyGraphQL(shop, accessToken, query, variables, missingSc
   });
 
   const json = await response.json();
-  const responseErrors = toErrorArray(response.errors);
-  const jsonErrors = toErrorArray(json?.errors);
-  const dataErrors = toErrorArray(json?.data?.errors);
+  const responseErrors = normalizeErrorList(response.errors);
+  const jsonErrors = normalizeErrorList(json?.errors);
+  const dataErrors = normalizeErrorList(json?.data?.errors);
   const combinedErrors = [...responseErrors, ...jsonErrors, ...dataErrors];
 
   console.log('Coupon Shopify raw response:', JSON.stringify(json, null, 2));
@@ -297,7 +297,7 @@ async function fetchShopifyOrders(shop, accessToken) {
     const payload = await response.json();
 
     if (!response.ok || payload.errors || payload.data?.orders == null) {
-      const graphQlErrors = toErrorArray(payload.errors);
+      const graphQlErrors = normalizeErrorList(payload.errors);
       const errorMessage =
         formatShopifyErrors(graphQlErrors) ||
         `Shopify API request failed: ${response.status}`;
@@ -376,9 +376,9 @@ async function createShopifyDiscountCode({ shop, token, customer, settings }) {
     { basicCodeDiscount },
     getMissingDiscountScopeMessage()
   );
-  const dataErrors = toErrorArray(response.data?.errors);
+  const dataErrors = normalizeErrorList(response.data?.errors);
   const result = response.data?.discountCodeBasicCreate;
-  const userErrors = toErrorArray(result?.userErrors);
+  const userErrors = normalizeErrorList(result?.userErrors);
   const combinedErrors = [...dataErrors, ...userErrors];
 
   console.log('[coupon_generation] discountCodeBasicCreate result', {
