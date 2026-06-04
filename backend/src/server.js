@@ -9,7 +9,7 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 const DEFAULT_SHOP = process.env.SHOPIFY_SHOP_DOMAIN || 'demo-shop.myshopify.com';
 const SHOPIFY_ADMIN_API_VERSION = '2024-10';
-const REQUIRED_SYNC_SCOPES = 'read_orders,read_customers';
+const REQUIRED_SYNC_SCOPES = 'read_orders';
 const REQUIRED_DISCOUNT_SCOPES = 'write_discounts';
 const REQUIRED_SHOPIFY_SCOPES = `${REQUIRED_SYNC_SCOPES},${REQUIRED_DISCOUNT_SCOPES}`;
 const frontendDist = path.resolve(__dirname, '../../frontend/dist');
@@ -41,7 +41,7 @@ function buildCustomerNameFromOrder(order, email) {
   ].filter(Boolean);
   if (candidateNames.length) return candidateNames[0];
   if (email && !email.endsWith('@example.local')) return email.split('@')[0];
-  return `Customer from order ${order?.name || order?.id || 'unknown'}`;
+  return `Customer from order #${order?.name || order?.id || 'unknown'}`;
 }
 
 function buildFallbackEmail(order) {
