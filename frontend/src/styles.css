@@ -467,6 +467,12 @@ textarea {
   line-height: 1.6;
 }
 
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 .field-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -644,6 +650,10 @@ th {
   max-width: 470px;
   margin: 0;
   line-height: 1.6;
+}
+
+.empty-state-sm {
+  min-height: 180px;
 }
 
 .empty-icon {

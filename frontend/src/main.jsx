@@ -115,10 +115,13 @@ function AppShell({ page, setPage, enabled, children }) {
 function OverviewPage({
   summary,
   ranking,
+  coupons,
   syncError,
   syncMessage,
   onSync,
   syncing,
+  onGenerateCoupons,
+  generatingCoupons,
   manualForm,
   onManualChange,
   onManualSubmit,
@@ -129,6 +132,7 @@ function OverviewPage({
 }) {
   const stats = summary || {};
   const customers = ranking || [];
+  const recentCoupons = coupons || [];
 
   return (
     <div className="page-stack">
@@ -207,9 +211,18 @@ function OverviewPage({
           <p>
             Import real Shopify orders and calculate customer scores.
           </p>
-          <button className="primary-button" onClick={onSync} disabled={syncing}>
-            {syncing ? 'Syncing...' : 'Start sync'}
-          </button>
+          <div className="button-row">
+            <button className="primary-button" onClick={onSync} disabled={syncing}>
+              {syncing ? 'Syncing...' : 'Start sync'}
+            </button>
+            <button
+              className="secondary-button"
+              onClick={onGenerateCoupons}
+              disabled={generatingCoupons}
+            >
+              {generatingCoupons ? 'Generating...' : 'Generate reward coupons'}
+            </button>
+          </div>
         </div>
 
         <div className="panel action-panel">
@@ -336,6 +349,7 @@ function OverviewPage({
                   <th>Last order</th>
                   <th>Score</th>
                   <th>Segment</th>
+                  <th>Coupon</th>
                 </tr>
               </thead>
               <tbody>
@@ -352,6 +366,7 @@ function OverviewPage({
                         {customer.segment}
                       </Pill>
                     </td>
+                    <td>{customer.latestCoupon?.discountCode || 'Not generated'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -366,6 +381,62 @@ function OverviewPage({
         )}
       </section>
 
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h3>Recent coupons</h3>
+            <p>Latest Shopify reward codes created for crown customers</p>
+          </div>
+        </div>
+        {recentCoupons.length ? (
+          <div className="table-shell">
+            <table>
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Code</th>
+                  <th>Value</th>
+                  <th>Expiry</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentCoupons.map((coupon, index) => (
+                  <tr key={`${coupon.customerEmail}-${coupon.discountCode || 'coupon'}-${index}`}>
+                    <td>{coupon.customerName || coupon.customerEmail}</td>
+                    <td>{coupon.discountCode || 'Not generated'}</td>
+                    <td>
+                      {coupon.discountType === 'percentage'
+                        ? `${coupon.discountValue}%`
+                        : formatCurrency(coupon.discountValue)}
+                    </td>
+                    <td>{coupon.endsAt ? new Date(coupon.endsAt).toLocaleDateString() : '—'}</td>
+                    <td>
+                      <Pill
+                        tone={
+                          coupon.status === 'created'
+                            ? 'success'
+                            : coupon.status === 'skipped'
+                              ? 'gold'
+                              : 'default'
+                        }
+                      >
+                        {coupon.status}
+                      </Pill>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty-state empty-state-sm">
+            <h3>No reward coupons yet</h3>
+            <p>Generate reward coupons to create real Shopify discount codes for your crown customers.</p>
+          </div>
+        )}
+      </section>
+
       <section className="panel note-panel">
         <strong>About CrownCustomers:</strong> CrownCustomers helps merchants identify loyal
         repeat buyers using recency, frequency, and monetary behavior, then reward them
@@ -376,19 +447,32 @@ function OverviewPage({
 }
 
 function ActivityPage({ logs }) {
+  const [statusFilter, setStatusFilter] = useState('all');
+  const filteredLogs = statusFilter === 'all'
+    ? logs
+    : logs.filter((log) => log.status === statusFilter);
+
   return (
     <div className="page-stack activity-page">
       <div className="page-row">
         <h2 className="section-title">Email Activity</h2>
-        <select className="filter-select" defaultValue="all">
+        <select
+          className="filter-select"
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+        >
           <option value="all">All statuses</option>
-          <option value="synced">Synced</option>
+          <option value="shopify_sync">Synced</option>
+          <option value="coupon_created">Coupon created</option>
+          <option value="coupon_failed">Coupon failed</option>
+          <option value="coupon_skipped">Coupon skipped</option>
           <option value="settings_saved">Settings saved</option>
+          <option value="manual_customer_added">Manual customer added</option>
         </select>
       </div>
 
       <section className="panel panel-xl">
-        {logs.length ? (
+        {filteredLogs.length ? (
           <div className="table-shell">
             <table>
               <thead>
@@ -400,7 +484,7 @@ function ActivityPage({ logs }) {
                 </tr>
               </thead>
               <tbody>
-                {logs.map((log) => (
+                {filteredLogs.map((log) => (
                   <tr key={log.id}>
                     <td>{new Date(log.createdAt).toLocaleString()}</td>
                     <td>{log.status}</td>
@@ -629,9 +713,11 @@ function App() {
   const [page, setPage] = useState('overview');
   const [summary, setSummary] = useState(null);
   const [ranking, setRanking] = useState([]);
+  const [coupons, setCoupons] = useState([]);
   const [logs, setLogs] = useState([]);
   const [settings, setSettings] = useState(null);
   const [syncing, setSyncing] = useState(false);
+  const [generatingCoupons, setGeneratingCoupons] = useState(false);
   const [saving, setSaving] = useState(false);
   const [addingManual, setAddingManual] = useState(false);
   const [error, setError] = useState('');
@@ -660,6 +746,11 @@ function App() {
     setLogs(data);
   }
 
+  async function loadCoupons() {
+    const data = await getJson('/api/rewards/coupons');
+    setCoupons(data);
+  }
+
   async function loadSettings() {
     const data = await getJson('/api/settings');
     setSettings(data);
@@ -667,7 +758,7 @@ function App() {
 
   async function refreshAll() {
     await getJson('/api/health');
-    await Promise.all([loadSummary(), loadRanking(), loadLogs(), loadSettings()]);
+    await Promise.all([loadSummary(), loadRanking(), loadCoupons(), loadLogs(), loadSettings()]);
     setError('');
   }
 
@@ -725,6 +816,23 @@ function App() {
     }
   }
 
+  async function handleGenerateCoupons() {
+    setGeneratingCoupons(true);
+    setSyncError('');
+    setSyncMessage('');
+    try {
+      const result = await getJson('/api/rewards/generate', { method: 'POST' });
+      await refreshAll();
+      setSyncMessage(
+        `Generated ${result.created || 0} coupons. Skipped ${result.skipped || 0}. Failed ${result.failed || 0}.`
+      );
+    } catch (err) {
+      setSyncError(err.message || 'Coupon generation failed.');
+    } finally {
+      setGeneratingCoupons(false);
+    }
+  }
+
   async function handleSave() {
     if (!settings) return;
     setSaving(true);
@@ -779,10 +887,13 @@ function App() {
         <OverviewPage
           summary={summary}
           ranking={ranking}
+          coupons={coupons}
           syncError={syncError}
           syncMessage={syncMessage}
           syncing={syncing}
           onSync={handleSync}
+          onGenerateCoupons={handleGenerateCoupons}
+          generatingCoupons={generatingCoupons}
           manualForm={manualForm}
           onManualChange={(field, value) =>
             setManualForm((current) => ({

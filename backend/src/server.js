@@ -2,13 +2,16 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const crypto = require('crypto');
 const { prisma } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 const DEFAULT_SHOP = process.env.SHOPIFY_SHOP_DOMAIN || 'demo-shop.myshopify.com';
 const SHOPIFY_ADMIN_API_VERSION = '2024-10';
-const REQUIRED_SHOPIFY_SCOPES = 'read_orders,read_customers';
+const REQUIRED_SYNC_SCOPES = 'read_orders,read_customers';
+const REQUIRED_DISCOUNT_SCOPES = 'write_discounts';
+const REQUIRED_SHOPIFY_SCOPES = `${REQUIRED_SYNC_SCOPES},${REQUIRED_DISCOUNT_SCOPES}`;
 const frontendDist = path.resolve(__dirname, '../../frontend/dist');
 
 app.use(cors({
@@ -85,12 +88,99 @@ function getMissingScopeMessage() {
   return 'Missing Shopify order/customer permissions. Please reinstall the app with updated scopes.';
 }
 
+function getMissingDiscountScopeMessage() {
+  return 'Missing write_discounts permission. Please update scopes and reinstall the app.';
+}
+
+function getMissingSessionMessage() {
+  return 'Missing Shopify session. Reinstall the app or complete OAuth.';
+}
+
 function normalizeManualDate(dateValue) {
   const parsed = new Date(dateValue);
   if (Number.isNaN(parsed.getTime())) {
     return new Date();
   }
   return parsed;
+}
+
+function sanitizeCouponName(name) {
+  return (name || 'CUSTOMER')
+    .split(' ')[0]
+    .replace(/[^a-z0-9]/gi, '')
+    .toUpperCase()
+    .slice(0, 10) || 'CUSTOMER';
+}
+
+function buildRewardCouponCode(name) {
+  const firstName = sanitizeCouponName(name);
+  const randomSuffix = crypto.randomBytes(4).toString('hex').slice(0, 6).toUpperCase();
+  return `CROWN-${firstName}-${randomSuffix}`;
+}
+
+function getCouponEndDate(couponDays) {
+  const now = new Date();
+  const totalDays = Math.max(1, Number(couponDays || 30));
+  return new Date(now.getTime() + totalDays * 24 * 60 * 60 * 1000);
+}
+
+function buildShopifyGraphQLError(message, fallbackMessage) {
+  const normalized = String(message || '').toLowerCase();
+  const error = new Error(message || 'Shopify API request failed.');
+
+  if (
+    normalized.includes('access denied') ||
+    normalized.includes('scope') ||
+    normalized.includes('write_discounts')
+  ) {
+    error.message = fallbackMessage || getMissingDiscountScopeMessage();
+    error.statusCode = 403;
+    return error;
+  }
+
+  if (
+    normalized.includes('unauthorized') ||
+    normalized.includes('invalid api key') ||
+    normalized.includes('invalid access token') ||
+    normalized.includes('oauth')
+  ) {
+    error.message = getMissingSessionMessage();
+    error.statusCode = 401;
+    return error;
+  }
+
+  error.statusCode = 502;
+  return error;
+}
+
+async function postShopifyGraphQL(shop, accessToken, query, variables, missingScopeMessage) {
+  if (!accessToken) {
+    const error = new Error(getMissingSessionMessage());
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const endpoint = `https://${shop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Shopify-Access-Token': accessToken
+    },
+    body: JSON.stringify({ query, variables })
+  });
+
+  const payload = await response.json();
+  const topLevelErrors = payload.errors || [];
+
+  if (!response.ok || topLevelErrors.length) {
+    const message =
+      topLevelErrors.map((entry) => entry.message).join('; ') ||
+      `Shopify API request failed: ${response.status}`;
+    throw buildShopifyGraphQLError(message, missingScopeMessage);
+  }
+
+  return payload.data;
 }
 
 async function getOrCreateSettings(shop) {
@@ -178,6 +268,95 @@ async function fetchShopifyOrders(shop, accessToken) {
   }
 
   return orders;
+}
+
+async function createShopifyDiscountCode({ shop, token, customer, settings }) {
+  const startsAt = new Date();
+  const endsAt = getCouponEndDate(settings.couponDays);
+  const discountCode = buildRewardCouponCode(customer.name);
+  const isPercentage = settings.discountType === 'percentage';
+  const mutation = `
+    mutation DiscountCodeBasicCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
+      discountCodeBasicCreate(basicCodeDiscount: $basicCodeDiscount) {
+        codeDiscountNode {
+          id
+        }
+        userErrors {
+          field
+          message
+          code
+        }
+      }
+    }
+  `;
+
+  const basicCodeDiscount = {
+    title: `CrownCustomers reward for ${customer.name}`,
+    code: discountCode,
+    startsAt: startsAt.toISOString(),
+    endsAt: endsAt.toISOString(),
+    appliesOncePerCustomer: true,
+    customerGets: {
+      items: { all: true },
+      value: isPercentage
+        ? { percentage: Number(settings.discountValue || 0) / 100 }
+        : {
+            discountAmount: {
+              amount: Number(settings.discountValue || 0),
+              appliesOnEachItem: false
+            }
+          }
+    }
+  };
+
+  const data = await postShopifyGraphQL(
+    shop,
+    token,
+    mutation,
+    { basicCodeDiscount },
+    getMissingDiscountScopeMessage()
+  );
+  const result = data?.discountCodeBasicCreate;
+  const userErrors = result?.userErrors || [];
+
+  if (!result?.codeDiscountNode?.id || userErrors.length) {
+    const message =
+      userErrors.map((entry) => entry.message).join('; ') ||
+      'Shopify did not return a discount id.';
+    throw buildShopifyGraphQLError(message, getMissingDiscountScopeMessage());
+  }
+
+  return {
+    discountCode,
+    discountType: settings.discountType,
+    discountValue: Number(settings.discountValue || 0),
+    startsAt,
+    endsAt,
+    shopifyDiscountId: result.codeDiscountNode.id
+  };
+}
+
+function isCooldownActive(existingCoupon, cooldownDays) {
+  if (!existingCoupon || existingCoupon.status !== 'created') {
+    return false;
+  }
+
+  const now = Date.now();
+  const cooldownWindow = Math.max(0, Number(cooldownDays || 0)) * 24 * 60 * 60 * 1000;
+  const createdAt = new Date(existingCoupon.createdAt).getTime();
+  const endsAt = new Date(existingCoupon.endsAt).getTime();
+
+  return endsAt > now || createdAt + cooldownWindow > now;
+}
+
+async function logCouponActivity(status, customer, message) {
+  await prisma.activityLog.create({
+    data: {
+      status,
+      customer,
+      message
+    }
+  });
 }
 
 function buildRankingsFromOrders(shop, orders) {
@@ -530,13 +709,55 @@ async function getDashboardSummary(shop) {
 }
 
 async function getRankedCustomers(shop) {
-  return prisma.customerScore.findMany({
+  const customers = await prisma.customerScore.findMany({
     where: { shop },
     orderBy: [
       { rfmScore: 'desc' },
       { totalSpent: 'desc' },
       { lastOrderDate: 'desc' }
     ]
+  });
+
+  const createdCoupons = await prisma.rewardCoupon.findMany({
+    where: { shop, status: 'created' },
+    orderBy: { createdAt: 'desc' }
+  });
+  const latestCouponByCustomerId = new Map();
+
+  for (const coupon of createdCoupons) {
+    if (!latestCouponByCustomerId.has(coupon.customerId)) {
+      latestCouponByCustomerId.set(coupon.customerId, coupon);
+    }
+  }
+
+  return customers.map((customer) => ({
+    ...customer,
+    latestCoupon: latestCouponByCustomerId.get(customer.customerId)
+      ? {
+          discountCode: latestCouponByCustomerId.get(customer.customerId).discountCode,
+          status: latestCouponByCustomerId.get(customer.customerId).status,
+          endsAt: latestCouponByCustomerId.get(customer.customerId).endsAt
+        }
+      : null
+  }));
+}
+
+async function getRecentCoupons(shop) {
+  return prisma.rewardCoupon.findMany({
+    where: { shop },
+    orderBy: { createdAt: 'desc' },
+    take: 20,
+    select: {
+      customerName: true,
+      customerEmail: true,
+      discountCode: true,
+      discountValue: true,
+      discountType: true,
+      startsAt: true,
+      endsAt: true,
+      status: true,
+      errorMessage: true
+    }
   });
 }
 
@@ -633,6 +854,187 @@ app.post('/api/customers/manual', async (req, res) => {
     message: 'Manual customer added.',
     customerId
   });
+});
+
+app.post('/api/rewards/generate', async (req, res) => {
+  const shop = getCurrentShop(req);
+  const token = getShopifyAccessToken();
+
+  if (!token) {
+    return res.status(401).json({
+      ok: false,
+      error: getMissingSessionMessage(),
+      requiredScopes: REQUIRED_DISCOUNT_SCOPES
+    });
+  }
+
+  const settings = await getOrCreateSettings(shop);
+  const crownCustomers = await prisma.customerScore.findMany({
+    where: {
+      shop,
+      OR: [{ isTop: true }, { segment: 'Crown Customer' }]
+    },
+    orderBy: [{ rfmScore: 'desc' }, { totalSpent: 'desc' }]
+  });
+
+  const activeCoupons = await prisma.rewardCoupon.findMany({
+    where: {
+      shop,
+      status: 'created',
+      customerId: { in: crownCustomers.map((customer) => customer.customerId) }
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+  const latestActiveCouponByCustomerId = new Map();
+
+  for (const coupon of activeCoupons) {
+    if (!latestActiveCouponByCustomerId.has(coupon.customerId)) {
+      latestActiveCouponByCustomerId.set(coupon.customerId, coupon);
+    }
+  }
+
+  let created = 0;
+  let skipped = 0;
+  let failed = 0;
+  const coupons = [];
+
+  for (const customer of crownCustomers) {
+    const customerLabel = customer.name || customer.email || customer.customerId;
+    const couponStartsAt = new Date();
+    const couponEndsAt = getCouponEndDate(settings.couponDays);
+    const existingCoupon = latestActiveCouponByCustomerId.get(customer.customerId);
+
+    if (!customer.email?.trim()) {
+      skipped += 1;
+      const rewardCoupon = await prisma.rewardCoupon.create({
+        data: {
+          shop,
+          customerScoreId: customer.id,
+          customerId: customer.customerId,
+          customerEmail: customer.email || '',
+          customerName: customer.name,
+          discountCode: null,
+          discountType: settings.discountType,
+          discountValue: Number(settings.discountValue || 0),
+          startsAt: couponStartsAt,
+          endsAt: couponEndsAt,
+          status: 'skipped',
+          errorMessage: 'Customer email is missing.'
+        }
+      });
+      await logCouponActivity('coupon_skipped', customerLabel, 'Skipped coupon generation because the customer email is missing.');
+      coupons.push(rewardCoupon);
+      continue;
+    }
+
+    if (isCooldownActive(existingCoupon, settings.cooldownDays)) {
+      skipped += 1;
+      const rewardCoupon = await prisma.rewardCoupon.create({
+        data: {
+          shop,
+          customerScoreId: customer.id,
+          customerId: customer.customerId,
+          customerEmail: customer.email,
+          customerName: customer.name,
+          discountCode: existingCoupon.discountCode,
+          discountType: settings.discountType,
+          discountValue: Number(settings.discountValue || 0),
+          startsAt: existingCoupon.startsAt,
+          endsAt: existingCoupon.endsAt,
+          shopifyDiscountId: existingCoupon.shopifyDiscountId,
+          status: 'skipped',
+          errorMessage: 'Active coupon already exists and cooldown has not expired.'
+        }
+      });
+      await logCouponActivity(
+        'coupon_skipped',
+        customerLabel,
+        `Skipped coupon generation because ${existingCoupon.discountCode || 'an active coupon'} is still in cooldown.`
+      );
+      coupons.push(rewardCoupon);
+      continue;
+    }
+
+    try {
+      const createdCoupon = await createShopifyDiscountCode({
+        shop,
+        token,
+        customer,
+        settings
+      });
+      created += 1;
+      const rewardCoupon = await prisma.rewardCoupon.create({
+        data: {
+          shop,
+          customerScoreId: customer.id,
+          customerId: customer.customerId,
+          customerEmail: customer.email,
+          customerName: customer.name,
+          discountCode: createdCoupon.discountCode,
+          discountType: createdCoupon.discountType,
+          discountValue: createdCoupon.discountValue,
+          startsAt: createdCoupon.startsAt,
+          endsAt: createdCoupon.endsAt,
+          shopifyDiscountId: createdCoupon.shopifyDiscountId,
+          status: 'created'
+        }
+      });
+      await logCouponActivity(
+        'coupon_created',
+        customerLabel,
+        `Coupon ${createdCoupon.discountCode} created for ${customerLabel}.`
+      );
+      coupons.push(rewardCoupon);
+    } catch (error) {
+      failed += 1;
+      const rewardCoupon = await prisma.rewardCoupon.create({
+        data: {
+          shop,
+          customerScoreId: customer.id,
+          customerId: customer.customerId,
+          customerEmail: customer.email,
+          customerName: customer.name,
+          discountCode: null,
+          discountType: settings.discountType,
+          discountValue: Number(settings.discountValue || 0),
+          startsAt: couponStartsAt,
+          endsAt: couponEndsAt,
+          status: 'failed',
+          errorMessage: error.message || 'Shopify coupon creation failed.'
+        }
+      });
+      await logCouponActivity(
+        'coupon_failed',
+        customerLabel,
+        error.message || 'Shopify coupon creation failed.'
+      );
+      coupons.push(rewardCoupon);
+
+      if (error.statusCode === 401 || error.statusCode === 403) {
+        return res.status(error.statusCode).json({
+          ok: false,
+          error: error.message,
+          created,
+          skipped,
+          failed,
+          coupons
+        });
+      }
+    }
+  }
+
+  res.json({
+    ok: true,
+    created,
+    skipped,
+    failed,
+    coupons
+  });
+});
+
+app.get('/api/rewards/coupons', async (req, res) => {
+  const shop = getCurrentShop(req);
+  res.json(await getRecentCoupons(shop));
 });
 
 app.get('/api/dashboard', async (req, res) => {

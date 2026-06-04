@@ -35,6 +35,7 @@ model CustomerScore {
   isTop         Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @default(now()) @updatedAt
+  rewardCoupons RewardCoupon[]
 
   @@unique([shop, customerId])
   @@index([shop, rfmScore])
@@ -56,4 +57,27 @@ model ActivityLog {
   customer  String
   message   String
   createdAt DateTime @default(now())
+}
+
+model RewardCoupon {
+  id                Int           @id @default(autoincrement())
+  shop              String
+  customerScoreId   Int
+  customerId        String
+  customerEmail     String
+  customerName      String
+  discountCode      String?
+  discountType      String
+  discountValue     Float
+  startsAt          DateTime
+  endsAt            DateTime
+  shopifyDiscountId String?
+  status            String
+  errorMessage      String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  customerScore     CustomerScore @relation(fields: [customerScoreId], references: [id], onDelete: Cascade)
+
+  @@index([shop, customerId, createdAt])
+  @@index([shop, status, createdAt])
 }
