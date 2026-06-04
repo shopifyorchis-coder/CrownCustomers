@@ -435,18 +435,23 @@ async function logCouponActivity(status, customer, message) {
 
 function buildRankingsFromOrders(shop, orders) {
   const grouped = new Map();
+  let skippedOrders = 0;
 
   for (const order of orders) {
     const email = order.customer?.email || order.email;
-    if (!email) continue;
+    const fallbackCustomerId = order.customer?.id;
+    if (!email && !fallbackCustomerId) {
+      skippedOrders += 1;
+      continue;
+    }
 
-    const customerId = order.customer?.id || email.toLowerCase();
+    const customerId = fallbackCustomerId || email.toLowerCase();
     const key = customerId;
     const existing = grouped.get(key) || {
       shop,
       customerId,
-      name: buildCustomerName(order.customer, email),
-      email,
+      name: buildCustomerName(order.customer, email || fallbackCustomerId),
+      email: email || fallbackCustomerId,
       totalSpent: 0,
       ordersCount: 0,
       lastOrderDate: order.createdAt
@@ -495,7 +500,7 @@ function buildRankingsFromOrders(shop, orders) {
 
   const topCount = ranked.length ? Math.max(1, Math.ceil(ranked.length * 0.2)) : 0;
 
-  return ranked.map((customer, index) => {
+  const rankedCustomers = ranked.map((customer, index) => {
     const isTop = index < topCount;
     return {
       shop: customer.shop,
@@ -516,6 +521,12 @@ function buildRankingsFromOrders(shop, orders) {
       isTop
     };
   });
+
+  return {
+    rankedCustomers,
+    groupedCustomers: customers.length,
+    skippedOrders
+  };
 }
 
 async function persistRankings(shop, rankedCustomers, ordersImported) {
@@ -1176,38 +1187,60 @@ app.post('/api/sync/shopify-orders', async (req, res) => {
   const shop = getCurrentShop(req);
   const accessToken = getShopifyAccessToken();
 
+  console.log('[shopify_sync] Starting sync', { shop, hasToken: Boolean(accessToken) });
+
   if (!accessToken) {
-    const previewCustomers = await seedPreviewCustomers(shop);
-    return res.json({
-      ok: true,
-      shop,
-      mode: 'preview',
-      customersImported: previewCustomers.length,
-      ordersImported: 0,
-      message: 'Preview customers loaded for UI testing.'
+    return res.status(401).json({
+      ok: false,
+      error: getMissingSessionMessage(),
+      requiredScopes: REQUIRED_SYNC_SCOPES
     });
   }
 
   try {
     const orders = await fetchShopifyOrders(shop, accessToken);
+    console.log('[shopify_sync] Orders fetched', {
+      shop,
+      ordersFetched: orders.length
+    });
     if (!orders.length) {
       return res.json({
         ok: true,
         shop,
         customersImported: 0,
         ordersImported: 0,
-        message: 'No customers found yet. Add customers manually or connect Shopify sync later.'
+        message: 'No Shopify customers found from orders. Create test orders with customer email and run sync again.'
       });
     }
-    const rankedCustomers = buildRankingsFromOrders(shop, orders);
+    const { rankedCustomers, groupedCustomers, skippedOrders } = buildRankingsFromOrders(shop, orders);
+    console.log('[shopify_sync] Orders grouped', {
+      shop,
+      customersGrouped: groupedCustomers,
+      skippedOrders
+    });
+
+    if (!rankedCustomers.length) {
+      return res.json({
+        ok: true,
+        shop,
+        customersImported: 0,
+        ordersImported: orders.length,
+        message: 'No Shopify customers found from orders. Create test orders with customer email and run sync again.'
+      });
+    }
 
     await persistRankings(shop, rankedCustomers, orders.length);
+    console.log('[shopify_sync] Customers saved', {
+      shop,
+      customersSaved: rankedCustomers.length
+    });
 
     res.json({
       ok: true,
       shop,
       customersImported: rankedCustomers.length,
-      ordersImported: orders.length
+      ordersImported: orders.length,
+      message: `Imported ${rankedCustomers.length} customers from ${orders.length} Shopify orders.`
     });
   } catch (error) {
     const statusCode = error.statusCode || 500;

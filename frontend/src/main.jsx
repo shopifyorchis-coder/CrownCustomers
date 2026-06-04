@@ -115,13 +115,10 @@ function AppShell({ page, setPage, enabled, children }) {
 function OverviewPage({
   summary,
   ranking,
-  coupons,
   syncError,
   syncMessage,
   onSync,
   syncing,
-  onGenerateCoupons,
-  generatingCoupons,
   onQuickDiscountSave,
   quickDiscount,
   setQuickDiscount
@@ -132,8 +129,6 @@ function OverviewPage({
     (customer) => customer.isTop || customer.segment === 'Crown Customer'
   );
   const displayCustomers = topCustomers.length ? topCustomers : customers;
-  const recentCoupons = coupons || [];
-
   return (
     <div className="page-stack">
       <section className="hero-block">
@@ -211,18 +206,9 @@ function OverviewPage({
           <p>
             Import real Shopify orders and calculate customer scores.
           </p>
-          <div className="button-row">
-            <button className="primary-button" onClick={onSync} disabled={syncing}>
-              {syncing ? 'Syncing...' : stats.totalCustomers ? 'Re-sync' : 'Start sync'}
-            </button>
-            <button
-              className="secondary-button"
-              onClick={onGenerateCoupons}
-              disabled={generatingCoupons}
-            >
-              {generatingCoupons ? 'Generating...' : 'Generate reward coupons'}
-            </button>
-          </div>
+          <button className="primary-button" onClick={onSync} disabled={syncing}>
+            {syncing ? 'Syncing...' : stats.totalCustomers ? 'Re-sync' : 'Start sync'}
+          </button>
         </div>
 
         <div className="panel action-panel">
@@ -642,11 +628,9 @@ function App() {
   const [page, setPage] = useState('overview');
   const [summary, setSummary] = useState(null);
   const [ranking, setRanking] = useState([]);
-  const [coupons, setCoupons] = useState([]);
   const [logs, setLogs] = useState([]);
   const [settings, setSettings] = useState(null);
   const [syncing, setSyncing] = useState(false);
-  const [generatingCoupons, setGeneratingCoupons] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [syncError, setSyncError] = useState('');
@@ -667,11 +651,6 @@ function App() {
     setLogs(data);
   }
 
-  async function loadCoupons() {
-    const data = await getJson('/api/rewards/coupons');
-    setCoupons(data);
-  }
-
   async function loadSettings() {
     const data = await getJson('/api/settings');
     setSettings(data);
@@ -679,7 +658,7 @@ function App() {
 
   async function refreshAll() {
     await getJson('/api/health');
-    await Promise.all([loadSummary(), loadRanking(), loadCoupons(), loadLogs(), loadSettings()]);
+    await Promise.all([loadSummary(), loadRanking(), loadLogs(), loadSettings()]);
     setError('');
   }
 
@@ -705,23 +684,6 @@ function App() {
       setSyncError(err.message || 'Shopify sync failed.');
     } finally {
       setSyncing(false);
-    }
-  }
-
-  async function handleGenerateCoupons() {
-    setGeneratingCoupons(true);
-    setSyncError('');
-    setSyncMessage('');
-    try {
-      const result = await getJson('/api/rewards/generate', { method: 'POST' });
-      await refreshAll();
-      setSyncMessage(
-        `Generated ${result.created || 0} coupons. Skipped ${result.skipped || 0}. Failed ${result.failed || 0}.`
-      );
-    } catch (err) {
-      setSyncError(err.message || 'Coupon generation failed.');
-    } finally {
-      setGeneratingCoupons(false);
     }
   }
 
@@ -779,13 +741,10 @@ function App() {
         <OverviewPage
           summary={summary}
           ranking={ranking}
-          coupons={coupons}
           syncError={syncError}
           syncMessage={syncMessage}
           syncing={syncing}
           onSync={handleSync}
-          onGenerateCoupons={handleGenerateCoupons}
-          generatingCoupons={generatingCoupons}
           quickDiscount={quickDiscount}
           setQuickDiscount={(updater) =>
             setSettings((current) => {
