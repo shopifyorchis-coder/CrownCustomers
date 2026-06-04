@@ -207,7 +207,7 @@ async function postShopifyGraphQL(shop, accessToken, query, variables, missingSc
   const dataErrors = toErrorArray(json?.data?.errors);
   const combinedErrors = [...responseErrors, ...jsonErrors, ...dataErrors];
 
-  console.log('Coupon Shopify response:', JSON.stringify(json, null, 2));
+  console.log('Coupon Shopify raw response:', JSON.stringify(json, null, 2));
   console.log('[coupon_generation] Shopify GraphQL response', {
     shop,
     status: response.status,
@@ -983,11 +983,11 @@ app.post('/api/rewards/generate', async (req, res) => {
     const couponEndsAt = getCouponEndDate(settings.couponDays);
     const existingCoupon = latestActiveCouponByCustomerId.get(customer.customerId);
 
-    console.log('[coupon_generation] Processing customer', {
-      shop,
-      hasToken: Boolean(token),
-      customerName: customer.name,
-      customerEmail: customer.email,
+  console.log('[coupon_generation] Processing customer', {
+    shop,
+    hasToken: Boolean(token),
+    customerName: customer.name,
+    customerEmail: customer.email,
       customerId: customer.customerId,
       discountType: settings.discountType,
       discountValue: Number(settings.discountValue || 0)
@@ -1051,6 +1051,7 @@ app.post('/api/rewards/generate', async (req, res) => {
     }
 
     try {
+      console.log('Coupon generation customer:', customer.email);
       const createdCoupon = await createShopifyDiscountCode({
         shop,
         token,
