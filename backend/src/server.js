@@ -104,20 +104,31 @@ function normalizeManualDate(dateValue) {
   return parsed;
 }
 
-function normalizeErrors(errors) {
-  if (!errors) return [];
-  if (Array.isArray(errors)) return errors;
-  if (typeof errors === 'string') return [{ message: errors }];
-  if (typeof errors === 'object') return [errors];
-  return [{ message: String(errors) }];
+function toErrorArray(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') return [{ message: value }];
+  if (typeof value === 'object') return [value];
+  return [{ message: String(value) }];
 }
 
-function buildReadableErrorMessage(errors, fallbackMessage) {
-  const normalized = normalizeErrors(errors);
-  const messages = normalized
-    .map((entry) => entry?.message || String(entry))
-    .filter(Boolean);
-  return messages.join('; ') || fallbackMessage;
+function formatShopifyErrors(value) {
+  return toErrorArray(value)
+    .map((err) => {
+      if (!err) return 'Unknown Shopify error';
+      if (typeof err === 'string') return err;
+      if (err.field && err.message) {
+        const fieldPath = Array.isArray(err.field) ? err.field.join('.') : String(err.field);
+        return `${fieldPath}: ${err.message}`;
+      }
+      if (err.message) return err.message;
+      try {
+        return JSON.stringify(err);
+      } catch (error) {
+        return String(err);
+      }
+    })
+    .join('; ');
 }
 
 function sanitizeCouponName(name) {
@@ -190,26 +201,31 @@ async function postShopifyGraphQL(shop, accessToken, query, variables, missingSc
     body: JSON.stringify({ query, variables })
   });
 
-  const payload = await response.json();
-  const topLevelErrors = normalizeErrors(payload.errors);
+  const json = await response.json();
+  const responseErrors = toErrorArray(response.errors);
+  const jsonErrors = toErrorArray(json?.errors);
+  const dataErrors = toErrorArray(json?.data?.errors);
+  const combinedErrors = [...responseErrors, ...jsonErrors, ...dataErrors];
 
+  console.log('Coupon Shopify response:', JSON.stringify(json, null, 2));
   console.log('[coupon_generation] Shopify GraphQL response', {
     shop,
     status: response.status,
-    rawPayload: payload,
-    topLevelErrors
+    responseErrors,
+    jsonErrors,
+    dataErrors
   });
 
-  if (!response.ok || topLevelErrors.length) {
-    const message = buildReadableErrorMessage(
-      topLevelErrors,
-      `Shopify API request failed: ${response.status}`
-    );
+  if (!response.ok || combinedErrors.length) {
+    const message =
+      formatShopifyErrors(combinedErrors) ||
+      `Shopify API request failed: ${response.status}`;
     throw buildShopifyGraphQLError(message, missingScopeMessage);
   }
 
   return {
-    data: payload.data,
+    data: json.data,
+    json,
     status: response.status
   };
 }
@@ -281,11 +297,10 @@ async function fetchShopifyOrders(shop, accessToken) {
     const payload = await response.json();
 
     if (!response.ok || payload.errors || payload.data?.orders == null) {
-      const graphQlErrors = normalizeErrors(payload.errors);
-      const errorMessage = buildReadableErrorMessage(
-        graphQlErrors,
-        `Shopify API request failed: ${response.status}`
-      );
+      const graphQlErrors = toErrorArray(payload.errors);
+      const errorMessage =
+        formatShopifyErrors(graphQlErrors) ||
+        `Shopify API request failed: ${response.status}`;
       const missingScopes = errorMessage.toLowerCase().includes('access denied') || errorMessage.toLowerCase().includes('scope');
       const err = new Error(missingScopes ? getMissingScopeMessage() : errorMessage);
       err.statusCode = missingScopes ? 403 : 502;
@@ -361,22 +376,27 @@ async function createShopifyDiscountCode({ shop, token, customer, settings }) {
     { basicCodeDiscount },
     getMissingDiscountScopeMessage()
   );
+  const dataErrors = toErrorArray(response.data?.errors);
   const result = response.data?.discountCodeBasicCreate;
-  const userErrors = normalizeErrors(result?.userErrors);
+  const userErrors = toErrorArray(result?.userErrors);
+  const combinedErrors = [...dataErrors, ...userErrors];
 
   console.log('[coupon_generation] discountCodeBasicCreate result', {
     shop,
     customerName: customer.name,
     customerEmail: customer.email,
     responseStatus: response.status,
+    dataErrors,
     userErrors
   });
 
-  if (!result?.codeDiscountNode?.id || userErrors.length) {
-    const message = buildReadableErrorMessage(
-      userErrors,
-      'Shopify did not return a discount id.'
-    );
+  if (combinedErrors.length) {
+    const message = formatShopifyErrors(combinedErrors) || 'Shopify did not return a discount code result.';
+    throw buildShopifyGraphQLError(message, getMissingDiscountScopeMessage());
+  }
+
+  if (!result?.codeDiscountNode?.id) {
+    const message = 'Shopify did not return a discount code result.';
     throw buildShopifyGraphQLError(message, getMissingDiscountScopeMessage());
   }
 
