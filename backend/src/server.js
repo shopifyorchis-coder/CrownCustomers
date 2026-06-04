@@ -37,11 +37,13 @@ function getShopifyAccessToken() {
 function buildCustomerNameFromOrder(order, email) {
   const candidateNames = [
     order?.billingAddress?.name,
-    order?.shippingAddress?.name
+    order?.shippingAddress?.name,
+    order?.billing_address?.name,
+    order?.shipping_address?.name
   ].filter(Boolean);
   if (candidateNames.length) return candidateNames[0];
   if (email && !email.endsWith('@example.local')) return email.split('@')[0];
-  return `Customer from order #${order?.name || order?.id || 'unknown'}`;
+  return `Customer from order #${order?.order_number || order?.orderNumber || order?.name || order?.id || 'unknown'}`;
 }
 
 function buildFallbackEmail(order) {
@@ -92,7 +94,7 @@ function buildSimpleSegment({ isTop, score }) {
 }
 
 function getMissingScopeMessage() {
-  return 'Missing Shopify order/customer permissions. Please reinstall the app with updated scopes.';
+  return 'Missing Shopify order permissions. Please reinstall the app with updated scopes.';
 }
 
 function getMissingDiscountScopeMessage() {
@@ -248,72 +250,43 @@ async function getOrCreateSettings(shop) {
 async function fetchShopifyOrders(shop, accessToken) {
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - 90);
-  const createdSince = startDate.toISOString().slice(0, 10);
-  const endpoint = `https://${shop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`;
-  const query = `
-    query FetchOrders($after: String, $search: String!) {
-      orders(first: 100, after: $after, sortKey: CREATED_AT, reverse: true, query: $search) {
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-        edges {
-          cursor
-          node {
-            id
-            name
-            createdAt
-            email
-            billingAddress {
-              name
-            }
-            shippingAddress {
-              name
-            }
-            currentTotalPriceSet {
-              shopMoney {
-                amount
-              }
-            }
-          }
-        }
-      }
-    }
-  `;
+  const createdSince = startDate.toISOString();
+  const fields = [
+    'id',
+    'name',
+    'order_number',
+    'email',
+    'current_total_price',
+    'total_price',
+    'created_at',
+    'billing_address',
+    'shipping_address'
+  ].join(',');
+  const baseUrl = `https://${shop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/orders.json`;
 
   const orders = [];
-  let after = null;
-  let hasNextPage = true;
+  let nextUrl = `${baseUrl}?status=any&limit=250&created_at_min=${encodeURIComponent(createdSince)}&fields=${encodeURIComponent(fields)}`;
 
-  while (hasNextPage) {
+  while (nextUrl) {
     try {
       console.log('[shopify_sync] Orders API request started', {
         shop,
-        after,
-        createdSince
+        nextUrl
       });
 
-      const response = await fetch(endpoint, {
-        method: 'POST',
+      const response = await fetch(nextUrl, {
+        method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
           'X-Shopify-Access-Token': accessToken
-        },
-        body: JSON.stringify({
-          query,
-          variables: {
-            after,
-            search: `created_at:>=${createdSince}`
-          }
-        })
+        }
       });
 
       const payload = await response.json();
 
-      if (!response.ok || payload.errors || payload.data?.orders == null) {
-        const graphQlErrors = normalizeErrorList(payload.errors);
+      if (!response.ok || !Array.isArray(payload?.orders)) {
+        const responseErrors = normalizeErrorList(payload?.errors || payload);
         const errorMessage =
-          formatShopifyErrors(graphQlErrors) ||
+          formatShopifyErrors(responseErrors) ||
           `Shopify API request failed: ${response.status}`;
         const missingScopes =
           errorMessage.toLowerCase().includes('access denied') ||
@@ -324,26 +297,23 @@ async function fetchShopifyOrders(shop, accessToken) {
         throw err;
       }
 
-      const connection = payload.data.orders;
-      const batchOrders = connection.edges.map((edge) => edge.node);
-      console.log('[shopify_sync] Orders API response count', {
-        shop,
-        batchCount: batchOrders.length
-      });
+      const batchOrders = payload.orders;
+      console.log('[shopify_sync] orders fetched', batchOrders.length);
 
       for (const order of batchOrders) {
         orders.push(order);
       }
 
-      hasNextPage = connection.pageInfo.hasNextPage;
-      after = connection.pageInfo.endCursor;
+      const linkHeader = response.headers.get('link') || '';
+      const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/i);
+      nextUrl = nextMatch ? nextMatch[1] : null;
     } catch (error) {
       console.error('[shopify_sync] ERROR', error);
       throw error;
     }
   }
 
-  console.log('[shopify_sync] Orders fetched', orders.length);
+  console.log('[shopify_sync] orders fetched', orders.length);
   return orders;
 }
 
@@ -482,13 +452,13 @@ function buildRankingsFromOrders(shop, orders) {
       email,
       totalSpent: 0,
       ordersCount: 0,
-      lastOrderDate: order.createdAt
+      lastOrderDate: order.created_at || order.createdAt
     };
 
-    existing.totalSpent += toCurrencyNumber(order.currentTotalPriceSet?.shopMoney?.amount);
+    existing.totalSpent += toCurrencyNumber(order.current_total_price || order.total_price || order.currentTotalPriceSet?.shopMoney?.amount);
     existing.ordersCount += 1;
-    if (new Date(order.createdAt) > new Date(existing.lastOrderDate)) {
-      existing.lastOrderDate = order.createdAt;
+    if (new Date(order.created_at || order.createdAt) > new Date(existing.lastOrderDate)) {
+      existing.lastOrderDate = order.created_at || order.createdAt;
     }
     if (!existing.name || existing.name.startsWith('Customer from order')) {
       existing.name = buildCustomerNameFromOrder(order, email);
@@ -1263,7 +1233,13 @@ app.post('/api/sync/shopify-orders', async (req, res) => {
       customersSaved: rankedCustomers.length,
       fallbackCustomersCreated
     });
+    console.log('[shopify_sync] fallback customers created', fallbackCustomersCreated);
     console.log('[shopify_sync] Final success count', {
+      shop,
+      customersImported: rankedCustomers.length,
+      ordersImported: orders.length
+    });
+    console.log('[shopify_sync] sync completed', {
       shop,
       customersImported: rankedCustomers.length,
       ordersImported: orders.length
