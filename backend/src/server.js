@@ -34,12 +34,19 @@ function getShopifyAccessToken() {
   return process.env.SHOPIFY_ADMIN_ACCESS_TOKEN || process.env.SHOPIFY_ACCESS_TOKEN || '';
 }
 
-function buildCustomerName(customer, email) {
-  const fullName = [customer?.firstName, customer?.lastName].filter(Boolean).join(' ').trim();
-  if (fullName) return fullName;
-  if (customer?.displayName) return customer.displayName;
-  if (email) return email.split('@')[0];
-  return 'Guest Customer';
+function buildCustomerNameFromOrder(order, email) {
+  const candidateNames = [
+    order?.billingAddress?.name,
+    order?.shippingAddress?.name
+  ].filter(Boolean);
+  if (candidateNames.length) return candidateNames[0];
+  if (email && !email.endsWith('@example.local')) return email.split('@')[0];
+  return `Customer from order ${order?.name || order?.id || 'unknown'}`;
+}
+
+function buildFallbackEmail(order) {
+  const rawId = String(order?.id || 'unknown').replace(/[^a-zA-Z0-9]/g, '').slice(-12) || 'unknown';
+  return `customer-${rawId}@example.local`;
 }
 
 function toCurrencyNumber(amount) {
@@ -254,19 +261,19 @@ async function fetchShopifyOrders(shop, accessToken) {
           cursor
           node {
             id
+            name
             createdAt
             email
+            billingAddress {
+              name
+            }
+            shippingAddress {
+              name
+            }
             currentTotalPriceSet {
               shopMoney {
                 amount
               }
-            }
-            customer {
-              id
-              displayName
-              firstName
-              lastName
-              email
             }
           }
         }
@@ -435,23 +442,23 @@ async function logCouponActivity(status, customer, message) {
 
 function buildRankingsFromOrders(shop, orders) {
   const grouped = new Map();
-  let skippedOrders = 0;
+  let fallbackCustomersCreated = 0;
 
   for (const order of orders) {
-    const email = order.customer?.email || order.email;
-    const fallbackCustomerId = order.customer?.id;
-    if (!email && !fallbackCustomerId) {
-      skippedOrders += 1;
-      continue;
+    const realEmail = order.email?.trim().toLowerCase();
+    const fallbackEmail = buildFallbackEmail(order);
+    const email = realEmail || fallbackEmail;
+    if (!realEmail) {
+      fallbackCustomersCreated += 1;
     }
 
-    const customerId = fallbackCustomerId || email.toLowerCase();
+    const customerId = email;
     const key = customerId;
     const existing = grouped.get(key) || {
       shop,
       customerId,
-      name: buildCustomerName(order.customer, email || fallbackCustomerId),
-      email: email || fallbackCustomerId,
+      name: buildCustomerNameFromOrder(order, email),
+      email,
       totalSpent: 0,
       ordersCount: 0,
       lastOrderDate: order.createdAt
@@ -462,8 +469,8 @@ function buildRankingsFromOrders(shop, orders) {
     if (new Date(order.createdAt) > new Date(existing.lastOrderDate)) {
       existing.lastOrderDate = order.createdAt;
     }
-    if (!existing.name || existing.name === 'Guest Customer') {
-      existing.name = buildCustomerName(order.customer, email);
+    if (!existing.name || existing.name.startsWith('Customer from order')) {
+      existing.name = buildCustomerNameFromOrder(order, email);
     }
 
     grouped.set(key, existing);
@@ -525,7 +532,7 @@ function buildRankingsFromOrders(shop, orders) {
   return {
     rankedCustomers,
     groupedCustomers: customers.length,
-    skippedOrders
+    fallbackCustomersCreated
   };
 }
 
@@ -1212,11 +1219,11 @@ app.post('/api/sync/shopify-orders', async (req, res) => {
         message: 'No Shopify customers found from orders. Create test orders with customer email and run sync again.'
       });
     }
-    const { rankedCustomers, groupedCustomers, skippedOrders } = buildRankingsFromOrders(shop, orders);
+    const { rankedCustomers, groupedCustomers, fallbackCustomersCreated } = buildRankingsFromOrders(shop, orders);
     console.log('[shopify_sync] Orders grouped', {
       shop,
       customersGrouped: groupedCustomers,
-      skippedOrders
+      fallbackCustomersCreated
     });
 
     if (!rankedCustomers.length) {
@@ -1232,7 +1239,8 @@ app.post('/api/sync/shopify-orders', async (req, res) => {
     await persistRankings(shop, rankedCustomers, orders.length);
     console.log('[shopify_sync] Customers saved', {
       shop,
-      customersSaved: rankedCustomers.length
+      customersSaved: rankedCustomers.length,
+      fallbackCustomersCreated
     });
 
     res.json({
