@@ -286,43 +286,64 @@ async function fetchShopifyOrders(shop, accessToken) {
   let hasNextPage = true;
 
   while (hasNextPage) {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': accessToken
-      },
-      body: JSON.stringify({
-        query,
-        variables: {
-          after,
-          search: `created_at:>=${createdSince}`
-        }
-      })
-    });
+    try {
+      console.log('[shopify_sync] Orders API request started', {
+        shop,
+        after,
+        createdSince
+      });
 
-    const payload = await response.json();
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Shopify-Access-Token': accessToken
+        },
+        body: JSON.stringify({
+          query,
+          variables: {
+            after,
+            search: `created_at:>=${createdSince}`
+          }
+        })
+      });
 
-    if (!response.ok || payload.errors || payload.data?.orders == null) {
-      const graphQlErrors = normalizeErrorList(payload.errors);
-      const errorMessage =
-        formatShopifyErrors(graphQlErrors) ||
-        `Shopify API request failed: ${response.status}`;
-      const missingScopes = errorMessage.toLowerCase().includes('access denied') || errorMessage.toLowerCase().includes('scope');
-      const err = new Error(missingScopes ? getMissingScopeMessage() : errorMessage);
-      err.statusCode = missingScopes ? 403 : 502;
-      throw err;
+      const payload = await response.json();
+
+      if (!response.ok || payload.errors || payload.data?.orders == null) {
+        const graphQlErrors = normalizeErrorList(payload.errors);
+        const errorMessage =
+          formatShopifyErrors(graphQlErrors) ||
+          `Shopify API request failed: ${response.status}`;
+        const missingScopes =
+          errorMessage.toLowerCase().includes('access denied') ||
+          errorMessage.toLowerCase().includes('scope');
+        const err = new Error(missingScopes ? getMissingScopeMessage() : errorMessage);
+        err.statusCode = missingScopes ? 403 : 502;
+        console.error('[shopify_sync] ERROR', err);
+        throw err;
+      }
+
+      const connection = payload.data.orders;
+      const batchOrders = connection.edges.map((edge) => edge.node);
+      console.log('[shopify_sync] Orders API response count', {
+        shop,
+        batchCount: batchOrders.length
+      });
+
+      for (const order of batchOrders) {
+        orders.push(order);
+      }
+
+      hasNextPage = connection.pageInfo.hasNextPage;
+      after = connection.pageInfo.endCursor;
+    } catch (error) {
+      console.error('[shopify_sync] ERROR', error);
+      throw error;
     }
-
-    const connection = payload.data.orders;
-    for (const edge of connection.edges) {
-      orders.push(edge.node);
-    }
-
-    hasNextPage = connection.pageInfo.hasNextPage;
-    after = connection.pageInfo.endCursor;
   }
 
+  console.log('[shopify_sync] Orders fetched', orders.length);
   return orders;
 }
 
@@ -1194,7 +1215,7 @@ app.post('/api/sync/shopify-orders', async (req, res) => {
   const shop = getCurrentShop(req);
   const accessToken = getShopifyAccessToken();
 
-  console.log('[shopify_sync] Starting sync', { shop, hasToken: Boolean(accessToken) });
+  console.log('[shopify_sync] Sync started', { shop, hasToken: Boolean(accessToken) });
 
   if (!accessToken) {
     return res.status(401).json({
@@ -1242,6 +1263,11 @@ app.post('/api/sync/shopify-orders', async (req, res) => {
       customersSaved: rankedCustomers.length,
       fallbackCustomersCreated
     });
+    console.log('[shopify_sync] Final success count', {
+      shop,
+      customersImported: rankedCustomers.length,
+      ordersImported: orders.length
+    });
 
     res.json({
       ok: true,
@@ -1252,9 +1278,10 @@ app.post('/api/sync/shopify-orders', async (req, res) => {
     });
   } catch (error) {
     const statusCode = error.statusCode || 500;
+    console.error('[shopify_sync] ERROR', error);
     res.status(statusCode).json({
       ok: false,
-      error: error.message || 'Shopify sync failed.',
+      error: error.message || 'Unknown sync error.',
       requiredScopes: REQUIRED_SHOPIFY_SCOPES
     });
   }
