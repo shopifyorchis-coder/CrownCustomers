@@ -398,6 +398,7 @@ function OverviewPage({
                   <th>Value</th>
                   <th>Expiry</th>
                   <th>Status</th>
+                  <th>Error reason</th>
                 </tr>
               </thead>
               <tbody>
@@ -424,6 +425,7 @@ function OverviewPage({
                         {coupon.status}
                       </Pill>
                     </td>
+                    <td>{coupon.errorMessage || '—'}</td>
                   </tr>
                 ))}
               </tbody>

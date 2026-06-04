@@ -89,11 +89,11 @@ function getMissingScopeMessage() {
 }
 
 function getMissingDiscountScopeMessage() {
-  return 'Missing write_discounts permission. Please update scopes and reinstall the app.';
+  return 'Missing write_discounts permission. Please reinstall the app.';
 }
 
 function getMissingSessionMessage() {
-  return 'Missing Shopify session. Reinstall the app or complete OAuth.';
+  return 'Missing Shopify session/token.';
 }
 
 function normalizeManualDate(dateValue) {
@@ -153,6 +153,10 @@ function buildShopifyGraphQLError(message, fallbackMessage) {
   return error;
 }
 
+function serializeErrorMessage(error, fallbackMessage) {
+  return error?.message || fallbackMessage || 'Unknown Shopify coupon generation error.';
+}
+
 async function postShopifyGraphQL(shop, accessToken, query, variables, missingScopeMessage) {
   if (!accessToken) {
     const error = new Error(getMissingSessionMessage());
@@ -173,6 +177,12 @@ async function postShopifyGraphQL(shop, accessToken, query, variables, missingSc
   const payload = await response.json();
   const topLevelErrors = payload.errors || [];
 
+  console.log('[coupon_generation] Shopify GraphQL response', {
+    shop,
+    status: response.status,
+    topLevelErrors
+  });
+
   if (!response.ok || topLevelErrors.length) {
     const message =
       topLevelErrors.map((entry) => entry.message).join('; ') ||
@@ -180,7 +190,10 @@ async function postShopifyGraphQL(shop, accessToken, query, variables, missingSc
     throw buildShopifyGraphQLError(message, missingScopeMessage);
   }
 
-  return payload.data;
+  return {
+    data: payload.data,
+    status: response.status
+  };
 }
 
 async function getOrCreateSettings(shop) {
@@ -309,15 +322,34 @@ async function createShopifyDiscountCode({ shop, token, customer, settings }) {
     }
   };
 
-  const data = await postShopifyGraphQL(
+  console.log('[coupon_generation] Creating Shopify discount', {
+    shop,
+    hasToken: Boolean(token),
+    customerName: customer.name,
+    customerEmail: customer.email,
+    customerId: customer.customerId,
+    discountType: settings.discountType,
+    discountValue: Number(settings.discountValue || 0),
+    generatedCode: discountCode
+  });
+
+  const response = await postShopifyGraphQL(
     shop,
     token,
     mutation,
     { basicCodeDiscount },
     getMissingDiscountScopeMessage()
   );
-  const result = data?.discountCodeBasicCreate;
+  const result = response.data?.discountCodeBasicCreate;
   const userErrors = result?.userErrors || [];
+
+  console.log('[coupon_generation] discountCodeBasicCreate result', {
+    shop,
+    customerName: customer.name,
+    customerEmail: customer.email,
+    responseStatus: response.status,
+    userErrors
+  });
 
   if (!result?.codeDiscountNode?.id || userErrors.length) {
     const message =
@@ -860,6 +892,11 @@ app.post('/api/rewards/generate', async (req, res) => {
   const shop = getCurrentShop(req);
   const token = getShopifyAccessToken();
 
+  console.log('[coupon_generation] Starting reward generation', {
+    shop,
+    hasToken: Boolean(token)
+  });
+
   if (!token) {
     return res.status(401).json({
       ok: false,
@@ -904,8 +941,19 @@ app.post('/api/rewards/generate', async (req, res) => {
     const couponEndsAt = getCouponEndDate(settings.couponDays);
     const existingCoupon = latestActiveCouponByCustomerId.get(customer.customerId);
 
+    console.log('[coupon_generation] Processing customer', {
+      shop,
+      hasToken: Boolean(token),
+      customerName: customer.name,
+      customerEmail: customer.email,
+      customerId: customer.customerId,
+      discountType: settings.discountType,
+      discountValue: Number(settings.discountValue || 0)
+    });
+
     if (!customer.email?.trim()) {
       skipped += 1;
+      const reason = 'Customer email is missing.';
       const rewardCoupon = await prisma.rewardCoupon.create({
         data: {
           shop,
@@ -919,16 +967,21 @@ app.post('/api/rewards/generate', async (req, res) => {
           startsAt: couponStartsAt,
           endsAt: couponEndsAt,
           status: 'skipped',
-          errorMessage: 'Customer email is missing.'
+          errorMessage: reason
         }
       });
-      await logCouponActivity('coupon_skipped', customerLabel, 'Skipped coupon generation because the customer email is missing.');
+      await logCouponActivity(
+        'coupon_skipped',
+        customerLabel,
+        `Skipped coupon generation for ${customerLabel}. Reason: ${reason}`
+      );
       coupons.push(rewardCoupon);
       continue;
     }
 
     if (isCooldownActive(existingCoupon, settings.cooldownDays)) {
       skipped += 1;
+      const reason = 'Active coupon already exists and cooldown has not expired.';
       const rewardCoupon = await prisma.rewardCoupon.create({
         data: {
           shop,
@@ -943,13 +996,13 @@ app.post('/api/rewards/generate', async (req, res) => {
           endsAt: existingCoupon.endsAt,
           shopifyDiscountId: existingCoupon.shopifyDiscountId,
           status: 'skipped',
-          errorMessage: 'Active coupon already exists and cooldown has not expired.'
+          errorMessage: reason
         }
       });
       await logCouponActivity(
         'coupon_skipped',
         customerLabel,
-        `Skipped coupon generation because ${existingCoupon.discountCode || 'an active coupon'} is still in cooldown.`
+        `Skipped coupon generation for ${customerLabel}. Reason: ${reason} Existing code: ${existingCoupon.discountCode || 'unknown'}.`
       );
       coupons.push(rewardCoupon);
       continue;
@@ -987,6 +1040,17 @@ app.post('/api/rewards/generate', async (req, res) => {
       coupons.push(rewardCoupon);
     } catch (error) {
       failed += 1;
+      const reason = serializeErrorMessage(error, 'Shopify coupon creation failed.');
+      console.error('[coupon_generation] Coupon creation failed', {
+        shop,
+        hasToken: Boolean(token),
+        customerName: customer.name,
+        customerEmail: customer.email,
+        customerId: customer.customerId,
+        discountType: settings.discountType,
+        discountValue: Number(settings.discountValue || 0),
+        error: reason
+      });
       const rewardCoupon = await prisma.rewardCoupon.create({
         data: {
           shop,
@@ -1000,13 +1064,13 @@ app.post('/api/rewards/generate', async (req, res) => {
           startsAt: couponStartsAt,
           endsAt: couponEndsAt,
           status: 'failed',
-          errorMessage: error.message || 'Shopify coupon creation failed.'
+          errorMessage: reason
         }
       });
       await logCouponActivity(
         'coupon_failed',
         customerLabel,
-        error.message || 'Shopify coupon creation failed.'
+        `Coupon generation failed for ${customerLabel}. Reason: ${reason}`
       );
       coupons.push(rewardCoupon);
 
