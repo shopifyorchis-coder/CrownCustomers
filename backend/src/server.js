@@ -947,6 +947,14 @@ app.post('/api/customers/manual', async (req, res) => {
 app.post('/api/rewards/generate', async (req, res) => {
   const shop = getCurrentShop(req);
   const token = getShopifyAccessToken();
+  const badRequest = (error, details) => {
+    console.error('[rewards] bad_request_reason:', { shop, error, details });
+    return res.status(400).json({
+      ok: false,
+      error,
+      details
+    });
+  };
 
   console.log('[rewards] starting', {
     shop,
@@ -963,10 +971,24 @@ app.post('/api/rewards/generate', async (req, res) => {
 
   const settings = await getOrCreateSettings(shop);
   if (!settings.enabled) {
-    return res.status(400).json({
-      ok: false,
-      error: 'CrownCustomers is disabled in Settings. Enable the app before generating reward coupons.'
-    });
+    return badRequest(
+      'App is disabled. Enable app first.',
+      'Open Settings and enable CrownCustomers before generating reward coupons.'
+    );
+  }
+
+  if (
+    !settings.discountType ||
+    !['percentage', 'fixed'].includes(settings.discountType) ||
+    !Number.isFinite(Number(settings.discountValue)) ||
+    Number(settings.discountValue) <= 0 ||
+    !Number.isFinite(Number(settings.couponDays)) ||
+    Number(settings.couponDays) <= 0
+  ) {
+    return badRequest(
+      'Discount settings missing. Save discount first.',
+      'Set a valid discount value, discount type, and coupon duration in Settings or the Overview discount panel.'
+    );
   }
 
   const crownCustomers = await prisma.customerScore.findMany({
@@ -976,6 +998,13 @@ app.post('/api/rewards/generate', async (req, res) => {
     },
     orderBy: [{ rfmScore: 'desc' }, { totalSpent: 'desc' }]
   });
+
+  if (!crownCustomers.length) {
+    return badRequest(
+      'No crown customers found. Run sync first.',
+      'Sync Shopify orders so CrownCustomers can calculate the top 20% before generating rewards.'
+    );
+  }
 
   const activeCoupons = await prisma.rewardCoupon.findMany({
     where: {
