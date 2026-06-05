@@ -373,7 +373,9 @@ async function createShopifyDiscountCode({ shop, token, customer, settings }) {
     usageLimit: 1,
     appliesOncePerCustomer: true,
     customerSelection: {
-      customers: [customer.shopifyCustomerId]
+      customers: {
+        add: [customer.shopifyCustomerId]
+      }
     },
     customerGets: {
       items: { all: true },
@@ -399,6 +401,7 @@ async function createShopifyDiscountCode({ shop, token, customer, settings }) {
     discountValue: Number(settings.discountValue || 0),
     generatedCode: discountCode
   });
+  console.log('[rewards] customerSelection payload', basicCodeDiscount.customerSelection);
 
   const response = await postShopifyGraphQL(
     shop,
