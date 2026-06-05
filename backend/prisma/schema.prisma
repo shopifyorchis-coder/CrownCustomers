@@ -25,6 +25,7 @@ model CustomerScore {
   id            Int      @id @default(autoincrement())
   shop          String   @default("demo-shop.myshopify.com")
   customerId    String
+  shopifyCustomerId String?
   name          String
   email         String
   totalSpent    Float    @default(0)

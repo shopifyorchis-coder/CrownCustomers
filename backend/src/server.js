@@ -35,7 +35,15 @@ function getShopifyAccessToken() {
 }
 
 function buildCustomerNameFromOrder(order, email) {
+  const customerFullName = [
+    order?.customer?.first_name || order?.customer?.firstName,
+    order?.customer?.last_name || order?.customer?.lastName
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
   const candidateNames = [
+    customerFullName,
     order?.billingAddress?.name,
     order?.shippingAddress?.name,
     order?.billing_address?.name,
@@ -49,6 +57,21 @@ function buildCustomerNameFromOrder(order, email) {
 function buildFallbackEmail(order) {
   const rawId = String(order?.id || 'unknown').replace(/[^a-zA-Z0-9]/g, '').slice(-12) || 'unknown';
   return `customer-${rawId}@example.local`;
+}
+
+function getOrderCustomerEmail(order) {
+  return String(order?.email || order?.customer?.email || '').trim().toLowerCase();
+}
+
+function getOrderShopifyCustomerId(order) {
+  const rawId =
+    order?.customer?.admin_graphql_api_id ||
+    order?.customer?.adminGraphqlApiId ||
+    order?.customer?.id;
+
+  if (!rawId) return null;
+  const value = String(rawId);
+  return value.startsWith('gid://') ? value : `gid://shopify/Customer/${value}`;
 }
 
 function toCurrencyNumber(amount) {
@@ -264,7 +287,8 @@ async function fetchShopifyOrders(shop, accessToken) {
     'total_price',
     'created_at',
     'billing_address',
-    'shipping_address'
+    'shipping_address',
+    'customer'
   ].join(',');
   const baseUrl = `https://${shop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/orders.json`;
 
@@ -348,6 +372,9 @@ async function createShopifyDiscountCode({ shop, token, customer, settings }) {
     endsAt: endsAt.toISOString(),
     usageLimit: 1,
     appliesOncePerCustomer: true,
+    customerSelection: {
+      customers: [customer.shopifyCustomerId]
+    },
     customerGets: {
       items: { all: true },
       value: isPercentage
@@ -367,6 +394,7 @@ async function createShopifyDiscountCode({ shop, token, customer, settings }) {
     customerName: customer.name,
     customerEmail: customer.email,
     customerId: customer.customerId,
+    selectedCustomerId: customer.shopifyCustomerId,
     discountType: settings.discountType,
     discountValue: Number(settings.discountValue || 0),
     generatedCode: discountCode
@@ -388,6 +416,7 @@ async function createShopifyDiscountCode({ shop, token, customer, settings }) {
     shop,
     customerName: customer.name,
     customerEmail: customer.email,
+    selectedCustomerId: customer.shopifyCustomerId,
     responseStatus: response.status,
     dataErrors,
     userErrors
@@ -441,24 +470,33 @@ function buildRankingsFromOrders(shop, orders) {
   let fallbackCustomersCreated = 0;
 
   for (const order of orders) {
-    const realEmail = order.email?.trim().toLowerCase();
+    const shopifyCustomerId = getOrderShopifyCustomerId(order);
+    const realEmail = getOrderCustomerEmail(order);
     const fallbackEmail = buildFallbackEmail(order);
     const email = realEmail || fallbackEmail;
-    if (!realEmail) {
+    if (!shopifyCustomerId && !realEmail) {
       fallbackCustomersCreated += 1;
     }
 
-    const customerId = email;
+    const customerId = shopifyCustomerId || email;
     const key = customerId;
     const existing = grouped.get(key) || {
       shop,
       customerId,
+      shopifyCustomerId,
       name: buildCustomerNameFromOrder(order, email),
       email,
       totalSpent: 0,
       ordersCount: 0,
       lastOrderDate: order.created_at || order.createdAt
     };
+
+    if (!existing.shopifyCustomerId && shopifyCustomerId) {
+      existing.shopifyCustomerId = shopifyCustomerId;
+    }
+
+    console.log('[sync] customer id', existing.shopifyCustomerId || 'missing');
+    console.log('[sync] customer email', email);
 
     existing.totalSpent += toCurrencyNumber(order.current_total_price || order.total_price || order.currentTotalPriceSet?.shopMoney?.amount);
     existing.ordersCount += 1;
@@ -508,6 +546,7 @@ function buildRankingsFromOrders(shop, orders) {
     return {
       shop: customer.shop,
       customerId: customer.customerId,
+      shopifyCustomerId: customer.shopifyCustomerId || null,
       name: customer.name,
       email: customer.email,
       totalSpent: customer.totalSpent,
@@ -552,6 +591,7 @@ async function persistRankings(shop, rankedCustomers, ordersImported) {
           }
         },
         update: {
+          shopifyCustomerId: customer.shopifyCustomerId,
           name: customer.name,
           email: customer.email,
           totalSpent: customer.totalSpent,
@@ -1038,6 +1078,7 @@ app.post('/api/rewards/generate', async (req, res) => {
       customerName: customer.name,
       customerEmail: customer.email,
       customerId: customer.customerId,
+      shopifyCustomerId: customer.shopifyCustomerId,
       discountType: settings.discountType,
       discountValue: Number(settings.discountValue || 0)
     });
@@ -1047,9 +1088,9 @@ app.post('/api/rewards/generate', async (req, res) => {
       `Reward candidate found for ${customerLabel}.`
     );
 
-    if (!customer.email?.trim()) {
+    if (!customer.shopifyCustomerId) {
       skipped += 1;
-      const reason = 'Customer email is missing.';
+      const reason = 'Missing Shopify customer id';
       const rewardCoupon = await prisma.rewardCoupon.create({
         data: {
           shop,
@@ -1105,10 +1146,12 @@ app.post('/api/rewards/generate', async (req, res) => {
     }
 
     try {
+      console.log('[rewards] selected customer id', customer.shopifyCustomerId);
       console.log('[rewards] creating discount', {
         shop,
         customerEmail: customer.email,
-        customerId: customer.customerId
+        customerId: customer.customerId,
+        selectedCustomerId: customer.shopifyCustomerId
       });
       const createdCoupon = await createShopifyDiscountCode({
         shop,

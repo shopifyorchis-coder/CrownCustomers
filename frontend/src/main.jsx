@@ -340,6 +340,7 @@ function OverviewPage({
                 <tr>
                   <th>Name</th>
                   <th>Email</th>
+                  <th>Shopify customer</th>
                   <th>Total spent</th>
                   <th># orders</th>
                   <th>Last purchase</th>
@@ -350,6 +351,7 @@ function OverviewPage({
                   <tr key={customer.id}>
                     <td>{customer.name}</td>
                     <td>{customer.email}</td>
+                    <td>{customer.shopifyCustomerId ? 'Available' : 'Missing'}</td>
                     <td>{formatCurrency(customer.totalSpent)}</td>
                     <td>{customer.ordersCount}</td>
                     <td>{new Date(customer.lastOrderDate).toLocaleDateString()}</td>
