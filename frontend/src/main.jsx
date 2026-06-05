@@ -115,10 +115,15 @@ function AppShell({ page, setPage, enabled, children }) {
 function OverviewPage({
   summary,
   ranking,
+  recentCoupons,
   syncError,
   syncMessage,
+  rewardError,
+  rewardMessage,
   onSync,
   syncing,
+  onGenerateRewards,
+  rewarding,
   onQuickDiscountSave,
   quickDiscount,
   setQuickDiscount
@@ -155,6 +160,20 @@ function OverviewPage({
         <section className="panel info-panel">
           <strong>Sync update</strong>
           <p>{syncMessage}</p>
+        </section>
+      )}
+
+      {rewardError && (
+        <section className="panel error-panel">
+          <strong>Coupon generation failed</strong>
+          <p>{rewardError}</p>
+        </section>
+      )}
+
+      {!rewardError && rewardMessage && (
+        <section className="panel info-panel">
+          <strong>Rewards update</strong>
+          <p>{rewardMessage}</p>
         </section>
       )}
 
@@ -205,8 +224,15 @@ function OverviewPage({
           <Pill tone="gold">STEP 01</Pill>
           <h3>Sync your store</h3>
           <p>Import real Shopify orders and calculate customer scores.</p>
-          <button className="primary-button" onClick={onSync} disabled={syncing}>
+          <button className="primary-button" onClick={onSync} disabled={syncing || rewarding}>
             {syncing ? 'Syncing...' : stats.totalCustomers ? 'Re-sync' : 'Start sync'}
+          </button>
+          <button
+            className="secondary-button"
+            onClick={onGenerateRewards}
+            disabled={rewarding || syncing}
+          >
+            {rewarding ? 'Generating...' : 'Generate reward coupons'}
           </button>
         </div>
 
@@ -251,6 +277,53 @@ function OverviewPage({
             Save discount
           </button>
         </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h3>Recent coupons</h3>
+            <p>Latest Shopify discount codes created for crown customers.</p>
+          </div>
+        </div>
+        {recentCoupons.length ? (
+          <div className="table-shell">
+            <table>
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Code</th>
+                  <th>Value</th>
+                  <th>Expiry</th>
+                  <th>Status</th>
+                  <th>Error reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentCoupons.map((coupon, index) => (
+                  <tr key={`${coupon.customerEmail}-${coupon.discountCode || index}`}>
+                    <td>{coupon.customerName || coupon.customerEmail}</td>
+                    <td>{coupon.discountCode || 'Not generated'}</td>
+                    <td>
+                      {coupon.discountType === 'percentage'
+                        ? `${Number(coupon.discountValue || 0)}%`
+                        : formatCurrency(coupon.discountValue)}
+                    </td>
+                    <td>{new Date(coupon.endsAt).toLocaleDateString()}</td>
+                    <td>{coupon.status}</td>
+                    <td>{coupon.errorMessage || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty-state">
+            <div className="empty-icon">%</div>
+            <h3>No coupons yet</h3>
+            <p>Generate reward coupons after syncing customers to see them here.</p>
+          </div>
+        )}
       </section>
 
       <section className="panel">
@@ -319,6 +392,12 @@ function ActivityPage({ logs }) {
         >
           <option value="all">All statuses</option>
           <option value="shopify_sync">Synced</option>
+          <option value="reward_candidate_found">Reward candidate found</option>
+          <option value="discount_created">Discount created</option>
+          <option value="discount_creation_failed">Discount creation failed</option>
+          <option value="coupon_assigned">Coupon assigned</option>
+          <option value="email_sent">Email sent</option>
+          <option value="email_failed">Email failed</option>
           <option value="coupon_created">Coupon created</option>
           <option value="coupon_failed">Coupon failed</option>
           <option value="coupon_skipped">Coupon skipped</option>
@@ -569,12 +648,16 @@ function App() {
   const [summary, setSummary] = useState(null);
   const [ranking, setRanking] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [recentCoupons, setRecentCoupons] = useState([]);
   const [settings, setSettings] = useState(null);
   const [syncing, setSyncing] = useState(false);
+  const [rewarding, setRewarding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [syncError, setSyncError] = useState('');
   const [syncMessage, setSyncMessage] = useState('');
+  const [rewardError, setRewardError] = useState('');
+  const [rewardMessage, setRewardMessage] = useState('');
 
   async function loadSummary() {
     const data = await getJson('/api/dashboard/summary');
@@ -596,9 +679,14 @@ function App() {
     setSettings(data);
   }
 
+  async function loadRecentCoupons() {
+    const data = await getJson('/api/rewards/coupons');
+    setRecentCoupons(data);
+  }
+
   async function refreshAll() {
     await getJson('/api/health');
-    await Promise.all([loadSummary(), loadRanking(), loadLogs(), loadSettings()]);
+    await Promise.all([loadSummary(), loadRanking(), loadLogs(), loadSettings(), loadRecentCoupons()]);
     setError('');
   }
 
@@ -643,6 +731,23 @@ function App() {
     }
   }
 
+  async function handleGenerateRewards() {
+    setRewarding(true);
+    setRewardError('');
+    setRewardMessage('');
+    try {
+      const result = await getJson('/api/rewards/generate', { method: 'POST' });
+      await refreshAll();
+      setRewardMessage(
+        `Generated ${result.created || 0} coupons. Skipped ${result.skipped || 0}. Failed ${result.failed || 0}.`
+      );
+    } catch (err) {
+      setRewardError(err.message || 'Reward coupon generation failed.');
+    } finally {
+      setRewarding(false);
+    }
+  }
+
   const quickDiscount = useMemo(
     () => ({
       discountValue: settings?.discountValue ?? 15,
@@ -684,10 +789,15 @@ function App() {
         <OverviewPage
           summary={summary}
           ranking={ranking}
+          recentCoupons={recentCoupons}
           syncError={syncError}
           syncMessage={syncMessage}
+          rewardError={rewardError}
+          rewardMessage={rewardMessage}
           syncing={syncing}
           onSync={handleSync}
+          onGenerateRewards={handleGenerateRewards}
+          rewarding={rewarding}
           quickDiscount={quickDiscount}
           setQuickDiscount={(updater) =>
             setSettings((current) => {

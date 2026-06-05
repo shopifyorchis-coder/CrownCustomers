@@ -148,10 +148,14 @@ function sanitizeCouponName(name) {
     .slice(0, 10) || 'CUSTOMER';
 }
 
-function buildRewardCouponCode(name) {
-  const firstName = sanitizeCouponName(name);
-  const randomSuffix = crypto.randomBytes(4).toString('hex').slice(0, 6).toUpperCase();
-  return `CROWN-${firstName}-${randomSuffix}`;
+function buildRewardCouponCode() {
+  const sequence = String(Date.now()).slice(-4);
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let randomSuffix = '';
+  for (let index = 0; index < 4; index += 1) {
+    randomSuffix += alphabet[crypto.randomInt(0, alphabet.length)];
+  }
+  return `CROWN-${sequence}-${randomSuffix}`;
 }
 
 function getCouponEndDate(couponDays) {
@@ -320,7 +324,7 @@ async function fetchShopifyOrders(shop, accessToken) {
 async function createShopifyDiscountCode({ shop, token, customer, settings }) {
   const startsAt = new Date();
   const endsAt = getCouponEndDate(settings.couponDays);
-  const discountCode = buildRewardCouponCode(customer.name);
+  const discountCode = buildRewardCouponCode();
   const isPercentage = settings.discountType === 'percentage';
   const mutation = `
     mutation DiscountCodeBasicCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
@@ -342,6 +346,7 @@ async function createShopifyDiscountCode({ shop, token, customer, settings }) {
     code: discountCode,
     startsAt: startsAt.toISOString(),
     endsAt: endsAt.toISOString(),
+    usageLimit: 1,
     appliesOncePerCustomer: true,
     customerGets: {
       items: { all: true },
@@ -943,7 +948,7 @@ app.post('/api/rewards/generate', async (req, res) => {
   const shop = getCurrentShop(req);
   const token = getShopifyAccessToken();
 
-  console.log('[coupon_generation] Starting reward generation', {
+  console.log('[rewards] starting', {
     shop,
     hasToken: Boolean(token)
   });
@@ -957,6 +962,13 @@ app.post('/api/rewards/generate', async (req, res) => {
   }
 
   const settings = await getOrCreateSettings(shop);
+  if (!settings.enabled) {
+    return res.status(400).json({
+      ok: false,
+      error: 'CrownCustomers is disabled in Settings. Enable the app before generating reward coupons.'
+    });
+  }
+
   const crownCustomers = await prisma.customerScore.findMany({
     where: {
       shop,
@@ -992,15 +1004,19 @@ app.post('/api/rewards/generate', async (req, res) => {
     const couponEndsAt = getCouponEndDate(settings.couponDays);
     const existingCoupon = latestActiveCouponByCustomerId.get(customer.customerId);
 
-  console.log('[coupon_generation] Processing customer', {
-    shop,
-    hasToken: Boolean(token),
-    customerName: customer.name,
-    customerEmail: customer.email,
+    console.log('[rewards] candidate found', {
+      shop,
+      customerName: customer.name,
+      customerEmail: customer.email,
       customerId: customer.customerId,
       discountType: settings.discountType,
       discountValue: Number(settings.discountValue || 0)
     });
+    await logCouponActivity(
+      'reward_candidate_found',
+      customerLabel,
+      `Reward candidate found for ${customerLabel}.`
+    );
 
     if (!customer.email?.trim()) {
       skipped += 1;
@@ -1060,7 +1076,11 @@ app.post('/api/rewards/generate', async (req, res) => {
     }
 
     try {
-      console.log('Coupon generation customer:', customer.email);
+      console.log('[rewards] creating discount', {
+        shop,
+        customerEmail: customer.email,
+        customerId: customer.customerId
+      });
       const createdCoupon = await createShopifyDiscountCode({
         shop,
         token,
@@ -1084,16 +1104,31 @@ app.post('/api/rewards/generate', async (req, res) => {
           status: 'created'
         }
       });
+      console.log('[rewards] discount created', {
+        shop,
+        customerEmail: customer.email,
+        code: createdCoupon.discountCode
+      });
       await logCouponActivity(
-        'coupon_created',
+        'discount_created',
         customerLabel,
         `Coupon ${createdCoupon.discountCode} created for ${customerLabel}.`
+      );
+      await logCouponActivity(
+        'coupon_assigned',
+        customerLabel,
+        `Coupon ${createdCoupon.discountCode} assigned to ${customerLabel}.`
+      );
+      await logCouponActivity(
+        'email_failed',
+        customerLabel,
+        `Reward email not sent for ${customerLabel}. Email delivery is not configured yet.`
       );
       coupons.push(rewardCoupon);
     } catch (error) {
       failed += 1;
       const reason = serializeErrorMessage(error, 'Shopify coupon creation failed.');
-      console.error('[coupon_generation] Coupon creation failed', {
+      console.error('[rewards] discount failed', {
         shop,
         hasToken: Boolean(token),
         customerName: customer.name,
@@ -1120,7 +1155,7 @@ app.post('/api/rewards/generate', async (req, res) => {
         }
       });
       await logCouponActivity(
-        'coupon_failed',
+        'discount_creation_failed',
         customerLabel,
         `Coupon generation failed for ${customerLabel}. Reason: ${reason}`
       );
@@ -1138,6 +1173,13 @@ app.post('/api/rewards/generate', async (req, res) => {
       }
     }
   }
+
+  console.log('[rewards] completed', {
+    shop,
+    created,
+    skipped,
+    failed
+  });
 
   res.json({
     ok: true,
