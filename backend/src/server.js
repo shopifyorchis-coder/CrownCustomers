@@ -874,11 +874,12 @@ async function getRankedCustomers(shop) {
 }
 
 async function getRecentCoupons(shop) {
-  return prisma.rewardCoupon.findMany({
+  const rows = await prisma.rewardCoupon.findMany({
     where: { shop },
     orderBy: { createdAt: 'desc' },
-    take: 20,
+    take: 100,
     select: {
+      customerId: true,
       customerName: true,
       customerEmail: true,
       discountCode: true,
@@ -890,6 +891,18 @@ async function getRecentCoupons(shop) {
       errorMessage: true
     }
   });
+
+  const latestByCustomerId = new Map();
+  for (const row of rows) {
+    if (!latestByCustomerId.has(row.customerId)) {
+      latestByCustomerId.set(row.customerId, row);
+    }
+    if (latestByCustomerId.size >= 10) {
+      break;
+    }
+  }
+
+  return Array.from(latestByCustomerId.values());
 }
 
 app.get('/api/health', (req, res) => {
@@ -1094,57 +1107,22 @@ app.post('/api/rewards/generate', async (req, res) => {
     if (!customer.shopifyCustomerId) {
       skipped += 1;
       const reason = 'Missing Shopify customer id';
-      const rewardCoupon = await prisma.rewardCoupon.create({
-        data: {
-          shop,
-          customerScoreId: customer.id,
-          customerId: customer.customerId,
-          customerEmail: customer.email || '',
-          customerName: customer.name,
-          discountCode: null,
-          discountType: settings.discountType,
-          discountValue: Number(settings.discountValue || 0),
-          startsAt: couponStartsAt,
-          endsAt: couponEndsAt,
-          status: 'skipped',
-          errorMessage: reason
-        }
-      });
       await logCouponActivity(
         'coupon_skipped',
         customerLabel,
         `Skipped coupon generation for ${customerLabel}. Reason: ${reason}`
       );
-      coupons.push(rewardCoupon);
       continue;
     }
 
     if (isCooldownActive(existingCoupon, settings.cooldownDays)) {
       skipped += 1;
       const reason = 'Active coupon already exists and cooldown has not expired.';
-      const rewardCoupon = await prisma.rewardCoupon.create({
-        data: {
-          shop,
-          customerScoreId: customer.id,
-          customerId: customer.customerId,
-          customerEmail: customer.email,
-          customerName: customer.name,
-          discountCode: existingCoupon.discountCode,
-          discountType: settings.discountType,
-          discountValue: Number(settings.discountValue || 0),
-          startsAt: existingCoupon.startsAt,
-          endsAt: existingCoupon.endsAt,
-          shopifyDiscountId: existingCoupon.shopifyDiscountId,
-          status: 'skipped',
-          errorMessage: reason
-        }
-      });
       await logCouponActivity(
         'coupon_skipped',
         customerLabel,
         `Skipped coupon generation for ${customerLabel}. Reason: ${reason} Existing code: ${existingCoupon.discountCode || 'unknown'}.`
       );
-      coupons.push(rewardCoupon);
       continue;
     }
 
@@ -1258,6 +1236,7 @@ app.post('/api/rewards/generate', async (req, res) => {
 
   res.json({
     ok: true,
+    generated: created,
     created,
     skipped,
     failed,

@@ -741,7 +741,7 @@ function App() {
       const result = await getJson('/api/rewards/generate', { method: 'POST' });
       await refreshAll();
       setRewardMessage(
-        `Generated ${result.created || 0} coupons. Skipped ${result.skipped || 0}. Failed ${result.failed || 0}.`
+        `Generated ${result.generated ?? result.created ?? 0} coupons. Skipped ${result.skipped || 0}. Failed ${result.failed || 0}.`
       );
     } catch (err) {
       setRewardError(err.message || 'Reward coupon generation failed.');
