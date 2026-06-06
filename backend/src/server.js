@@ -482,7 +482,9 @@ function buildRankingsFromOrders(shop, orders) {
 
   for (const order of orders) {
     console.log('[sync] order name', order?.name || order?.order_number || order?.id || 'unknown');
-    console.log('[sync] raw order customer', order?.customer || null);
+    console.log('[sync] raw order.customer', order?.customer || null);
+    console.log('[sync] order.email', order?.email || '');
+    console.log('[sync] order.contact_email', order?.contact_email || '');
     const shopifyCustomerId = getOrderShopifyCustomerId(order);
     const realEmail = getOrderCustomerEmail(order);
     const fallbackEmail = buildFallbackEmail(order);
@@ -531,8 +533,8 @@ function buildRankingsFromOrders(shop, orders) {
       ? chosenName
       : existing.name;
 
-    console.log('[sync] chosen customer name', existing.name);
-    console.log('[sync] chosen customer email', email);
+    console.log('[sync] final customer name', existing.name);
+    console.log('[sync] final customer email', existing.email);
     console.log('[sync] shopifyCustomerId', existing.shopifyCustomerId || 'missing');
     console.log('[sync] fallback used', fallbackUsed);
 
