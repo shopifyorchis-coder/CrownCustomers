@@ -481,6 +481,7 @@ function buildRankingsFromOrders(shop, orders) {
   let fallbackCustomersCreated = 0;
 
   for (const order of orders) {
+    console.log('[sync] order name', order?.name || order?.order_number || order?.id || 'unknown');
     console.log('[sync] raw order customer', order?.customer || null);
     const shopifyCustomerId = getOrderShopifyCustomerId(order);
     const realEmail = getOrderCustomerEmail(order);
@@ -492,8 +493,21 @@ function buildRankingsFromOrders(shop, orders) {
     }
 
     const customerId = shopifyCustomerId || email;
-    const key = customerId;
-    const existing = grouped.get(key) || {
+    let key = customerId;
+    let existing = grouped.get(key);
+
+    if (!existing && shopifyCustomerId && realEmail && grouped.has(realEmail)) {
+      existing = grouped.get(realEmail);
+      grouped.delete(realEmail);
+      key = shopifyCustomerId;
+    }
+
+    if (!existing && shopifyCustomerId && grouped.has(shopifyCustomerId)) {
+      existing = grouped.get(shopifyCustomerId);
+      key = shopifyCustomerId;
+    }
+
+    existing = existing || {
       shop,
       customerId,
       shopifyCustomerId,
@@ -506,9 +520,13 @@ function buildRankingsFromOrders(shop, orders) {
 
     if (!existing.shopifyCustomerId && shopifyCustomerId) {
       existing.shopifyCustomerId = shopifyCustomerId;
+      existing.customerId = shopifyCustomerId;
     }
 
     const chosenName = buildCustomerNameFromOrder(order, email);
+    if (realEmail && (!existing.email || existing.email.endsWith('@example.local'))) {
+      existing.email = realEmail;
+    }
     existing.name = !existing.name || existing.name.startsWith('Customer from order')
       ? chosenName
       : existing.name;
