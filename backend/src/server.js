@@ -44,13 +44,13 @@ function buildCustomerNameFromOrder(order, email) {
     .trim();
   const candidateNames = [
     customerFullName,
+    order?.customer?.default_address?.name,
     order?.billingAddress?.name,
     order?.shippingAddress?.name,
     order?.billing_address?.name,
     order?.shipping_address?.name
   ].filter(Boolean);
   if (candidateNames.length) return candidateNames[0];
-  if (email && !email.endsWith('@example.local')) return email.split('@')[0];
   return `Customer from order #${order?.order_number || order?.orderNumber || order?.name || order?.id || 'unknown'}`;
 }
 
@@ -60,7 +60,14 @@ function buildFallbackEmail(order) {
 }
 
 function getOrderCustomerEmail(order) {
-  return String(order?.email || order?.customer?.email || '').trim().toLowerCase();
+  return String(
+    order?.customer?.email ||
+      order?.email ||
+      order?.contact_email ||
+      ''
+  )
+    .trim()
+    .toLowerCase();
 }
 
 function getOrderShopifyCustomerId(order) {
@@ -283,6 +290,7 @@ async function fetchShopifyOrders(shop, accessToken) {
     'name',
     'order_number',
     'email',
+    'contact_email',
     'current_total_price',
     'total_price',
     'created_at',
@@ -473,10 +481,12 @@ function buildRankingsFromOrders(shop, orders) {
   let fallbackCustomersCreated = 0;
 
   for (const order of orders) {
+    console.log('[sync] raw order customer', order?.customer || null);
     const shopifyCustomerId = getOrderShopifyCustomerId(order);
     const realEmail = getOrderCustomerEmail(order);
     const fallbackEmail = buildFallbackEmail(order);
     const email = realEmail || fallbackEmail;
+    const fallbackUsed = !realEmail;
     if (!shopifyCustomerId && !realEmail) {
       fallbackCustomersCreated += 1;
     }
@@ -498,16 +508,20 @@ function buildRankingsFromOrders(shop, orders) {
       existing.shopifyCustomerId = shopifyCustomerId;
     }
 
-    console.log('[sync] customer id', existing.shopifyCustomerId || 'missing');
-    console.log('[sync] customer email', email);
+    const chosenName = buildCustomerNameFromOrder(order, email);
+    existing.name = !existing.name || existing.name.startsWith('Customer from order')
+      ? chosenName
+      : existing.name;
+
+    console.log('[sync] chosen customer name', existing.name);
+    console.log('[sync] chosen customer email', email);
+    console.log('[sync] shopifyCustomerId', existing.shopifyCustomerId || 'missing');
+    console.log('[sync] fallback used', fallbackUsed);
 
     existing.totalSpent += toCurrencyNumber(order.current_total_price || order.total_price || order.currentTotalPriceSet?.shopMoney?.amount);
     existing.ordersCount += 1;
     if (new Date(order.created_at || order.createdAt) > new Date(existing.lastOrderDate)) {
       existing.lastOrderDate = order.created_at || order.createdAt;
-    }
-    if (!existing.name || existing.name.startsWith('Customer from order')) {
-      existing.name = buildCustomerNameFromOrder(order, email);
     }
 
     grouped.set(key, existing);
